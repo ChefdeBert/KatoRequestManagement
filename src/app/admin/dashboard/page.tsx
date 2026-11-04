@@ -1,12 +1,24 @@
-import { ExternalLink, Search, ShieldCheck } from 'lucide-react';
+import { BookOpen, ExternalLink, Search, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { BrdPreview } from '@/components/brd-preview';
-import { LevelBadge, StatusBadge, SyncBadge } from '@/components/status-badge';
+import { LevelBadge, RouteBadge, StatusBadge, SyncBadge, SyncStateBadge } from '@/components/status-badge';
 import { Badge, Button, Card, Input, selectClass } from '@/components/ui';
-import { PAGE_SIZE, STATUSES, getRequestDetail, listRequests, parseFilters, statusCounts, type RequestDetail } from '@/lib/admin-queries';
+import {
+  PAGE_SIZE,
+  STATUSES,
+  getRequestDetail,
+  listRequests,
+  parseFilters,
+  pipelineSummary,
+  statusCounts,
+  type RequestDetail,
+} from '@/lib/admin-queries';
+import type { StoredAutonomy, StoredFinancial } from '@/lib/assessment';
 import { getCurrentUser, isStaff, type SessionUser } from '@/lib/auth';
-import { LEVELS, OPCO_LABELS, OPCOS, asDraft, formatRef, type OpCoValue } from '@/lib/brd';
+import { FINANCIAL_LENSES, LEVELS, OPCO_LABELS, OPCOS, asDraft, formatRef, formatUsd, type OpCoValue } from '@/lib/brd';
+import { requireAssessmentForApproval } from '@/lib/lifecycle';
+import { ROUTES, ROUTE_DESCRIPTIONS, ROUTE_LABELS } from '@/lib/routes';
 import { cn, formatDateTime } from '@/lib/utils';
 import { AdminActions } from './admin-actions';
 
@@ -21,7 +33,7 @@ const STATUS_LABEL: Record<(typeof STATUSES)[number], string> = {
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
 };
-const TABS = ['brd', 'transcript', 'audit', 'jira'] as const;
+const TABS = ['assessment', 'brd', 'transcript', 'audit', 'jira'] as const;
 type Tab = (typeof TABS)[number];
 
 function href(sp: SP, patch: Record<string, string | undefined>) {
@@ -34,6 +46,8 @@ function href(sp: SP, patch: Record<string, string | undefined>) {
 }
 
 const opcoLabel = (o?: string | null) => (o && o in OPCO_LABELS ? OPCO_LABELS[o as OpCoValue] : '—');
+const n = (d: { toNumber(): number } | null | undefined) => (d == null ? null : d.toNumber());
+const usd = (v: number | null) => formatUsd(v, { compact: true });
 
 export default async function AdminDashboardPage({ searchParams }: { searchParams: Promise<SP> }) {
   const user = await getCurrentUser();
@@ -43,11 +57,12 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
   const sp = await searchParams;
   const filters = parseFilters(sp);
   const selectedId = typeof sp.selected === 'string' ? sp.selected : undefined;
-  const tab: Tab = TABS.includes(sp.tab as Tab) ? (sp.tab as Tab) : 'brd';
+  const tab: Tab = TABS.includes(sp.tab as Tab) ? (sp.tab as Tab) : 'assessment';
 
-  const [{ items, total }, counts, detail] = await Promise.all([
+  const [{ items, total }, counts, pipeline, detail] = await Promise.all([
     listRequests(filters),
     statusCounts(),
+    pipelineSummary(),
     selectedId ? getRequestDetail(selectedId) : Promise.resolve(null),
   ]);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -86,6 +101,14 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
             </Link>
           ))}
         </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <ValueTile label="Open pipeline EBITDA / yr" value={usd(pipeline.openEbitdaUsd)} hint={`Revenue ${usd(pipeline.openRevenueUsd)} · cash flow ${usd(pipeline.openCashFlowUsd)}`} />
+          <ValueTile label="Approved EBITDA / yr" value={usd(pipeline.approvedEbitdaUsd)} hint="Assessed value of approved requests" />
+          <Link href={href({}, { route: 'AUTONOMOUS' })}>
+            <ValueTile label="Eligible for autonomous route" value={String(pipeline.autonomousEligible)} hint="Open requests recommended Autonomous" />
+          </Link>
+          <ValueTile label="Awaiting assessment" value={String(pipeline.awaitingAssessment)} hint="Pending or failed value / route assessment" warn={pipeline.awaitingAssessment > 0} />
+        </div>
 
         {/* ── Filters ───────────────────────────────────── */}
         <form method="GET" className="flex flex-wrap items-center gap-2">
@@ -117,6 +140,19 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
               </option>
             ))}
           </select>
+          <select name="route" defaultValue={filters.route ?? ''} className={selectClass} aria-label="Development route">
+            <option value="">All routes</option>
+            {ROUTES.map((r) => (
+              <option key={r} value={r}>
+                {ROUTE_LABELS[r]}
+              </option>
+            ))}
+          </select>
+          <select name="sort" defaultValue={filters.sort} className={selectClass} aria-label="Sort">
+            <option value="newest">Newest first</option>
+            <option value="value">Highest value score</option>
+            <option value="ebitda">Highest EBITDA impact</option>
+          </select>
           <Button type="submit" size="sm">
             Apply
           </Button>
@@ -135,8 +171,10 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
                     <th className="px-4 py-2.5 font-medium">Ref</th>
                     <th className="px-4 py-2.5 font-medium">Request</th>
                     <th className="px-4 py-2.5 font-medium">OpCo</th>
+                    <th className="px-4 py-2.5 text-right font-medium">EBITDA / yr</th>
+                    <th className="px-4 py-2.5 text-right font-medium">Value</th>
+                    <th className="px-4 py-2.5 font-medium">Route</th>
                     <th className="px-4 py-2.5 font-medium">Impact</th>
-                    <th className="px-4 py-2.5 font-medium">Urgency</th>
                     <th className="px-4 py-2.5 font-medium">Status</th>
                     <th className="px-4 py-2.5 font-medium">Submitted</th>
                   </tr>
@@ -144,7 +182,7 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
                 <tbody>
                   {items.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
+                      <td colSpan={9} className="px-4 py-12 text-center text-muted-foreground">
                         No requests match these filters.
                       </td>
                     </tr>
@@ -166,11 +204,21 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
                         </Link>
                       </td>
                       <td className="px-4 py-3 text-xs">{opcoLabel(r.opco)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums">
+                        {r.assessedEbitdaUsd != null ? (
+                          <span className="font-medium">{usd(n(r.assessedEbitdaUsd))}</span>
+                        ) : (
+                          <span className="text-muted-foreground" title="Requester-stated, not yet assessed">
+                            {usd(n(r.statedEbitdaUsd))}*
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{r.valueScore ?? '—'}</td>
                       <td className="px-4 py-3">
-                        <LevelBadge level={r.impact} />
+                        <RouteBadge route={r.approvedRoute ?? r.recommendedRoute} pending={r.assessmentStatus === 'PENDING'} />
                       </td>
                       <td className="px-4 py-3">
-                        <LevelBadge level={r.urgency} />
+                        <LevelBadge level={r.impact} />
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
@@ -184,6 +232,7 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
                 </tbody>
               </table>
             </div>
+            <p className="border-t px-4 py-2 text-[11px] text-muted-foreground">EBITDA is Kato&apos;s assessed annual figure; * marks requester-stated values still awaiting assessment.</p>
             {pages > 1 && (
               <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
                 <span>
@@ -216,6 +265,7 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
   const reference = formatRef(detail.number);
   const brdDoc = detail.brdDocuments[0];
   const latestTask = detail.jiraSyncTasks[0];
+  const assessment = detail.assessments[0];
 
   return (
     <Card className="flex max-h-[calc(100dvh-10rem)] flex-col overflow-hidden xl:sticky xl:top-6">
@@ -230,11 +280,42 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
           </div>
           <div className="flex flex-col items-end gap-1">
             <StatusBadge status={detail.status} />
+            {detail.confluencePageUrl ? (
+              <a href={detail.confluencePageUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                <BookOpen className="h-3 w-3" /> BRD in Confluence
+              </a>
+            ) : (
+              <SyncStateBadge state={detail.confluenceSyncState} />
+            )}
             {detail.jiraIssueKey && (
               <a href={detail.jiraIssueUrl ?? '#'} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-xs text-primary hover:underline">
                 {detail.jiraIssueKey} <ExternalLink className="h-3 w-3" />
               </a>
             )}
+          </div>
+        </div>
+        <div className="grid grid-cols-5 gap-2">
+          {FINANCIAL_LENSES.map((l) => {
+            const assessed = n(l.key === 'revenueGrowthUsd' ? detail.assessedRevenueUsd : l.key === 'ebitdaImpactUsd' ? detail.assessedEbitdaUsd : detail.assessedCashFlowUsd);
+            const stated = n(l.key === 'revenueGrowthUsd' ? detail.statedRevenueUsd : l.key === 'ebitdaImpactUsd' ? detail.statedEbitdaUsd : detail.statedCashFlowUsd);
+            return (
+              <div key={l.key} className="rounded-md border p-2">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{l.short} / yr</p>
+                <p className="text-sm font-semibold tabular-nums">{usd(assessed ?? stated)}</p>
+                <p className="text-[10px] text-muted-foreground">{assessed != null ? `stated ${usd(stated)}` : 'stated · not assessed'}</p>
+              </div>
+            );
+          })}
+          <div className="rounded-md border p-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Value score</p>
+            <p className="text-sm font-semibold tabular-nums">{detail.valueScore ?? '—'}<span className="text-xs font-normal text-muted-foreground">/100</span></p>
+          </div>
+          <div className="rounded-md border p-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Route</p>
+            <div className="mt-0.5">
+              <RouteBadge route={detail.approvedRoute ?? detail.recommendedRoute} pending={detail.assessmentStatus === 'PENDING'} />
+            </div>
+            {detail.autonomyScore != null && <p className="text-[10px] text-muted-foreground">autonomy {detail.autonomyScore}/100</p>}
           </div>
         </div>
         {detail.status === 'REJECTED' && detail.rejectionReason && (
@@ -247,6 +328,9 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
           reference={reference}
           status={detail.status}
           isOwnRequest={detail.requesterId === user.id && process.env.KATO_ALLOW_SELF_APPROVAL !== 'true'}
+          requireAssessment={requireAssessmentForApproval()}
+          assessment={{ status: detail.assessmentStatus, recommendedRoute: detail.recommendedRoute, autonomyScore: detail.autonomyScore }}
+          confluenceState={detail.confluenceSyncState}
           jiraTask={latestTask ? { id: latestTask.id, status: latestTask.status } : null}
         />
         <nav className="flex gap-1 border-b -mb-5 pt-1">
@@ -256,13 +340,14 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
               href={href(sp, { tab: t })}
               className={cn('-mb-px border-b-2 px-3 py-2 text-sm capitalize', tab === t ? 'border-primary font-medium' : 'border-transparent text-muted-foreground hover:text-foreground')}
             >
-              {t === 'brd' ? `BRD${brdDoc ? ` v${brdDoc.version}` : ''}` : t === 'jira' ? `Jira (${detail.jiraSyncTasks.length})` : t === 'audit' ? `Audit (${detail.approvalLogs.length})` : `Transcript (${detail.messages.length})`}
+              {t === 'assessment' ? 'Assessment' : t === 'brd' ? `BRD${brdDoc ? ` v${brdDoc.version}` : ''}` : t === 'jira' ? `Jira (${detail.jiraSyncTasks.length})` : t === 'audit' ? `Audit (${detail.approvalLogs.length})` : `Transcript (${detail.messages.length})`}
             </Link>
           ))}
         </nav>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5">
+        {tab === 'assessment' && <AssessmentView detail={detail} assessment={assessment} />}
         {tab === 'brd' && <BrdPreview draft={asDraft(brdDoc?.content ?? detail.draftBrd)} reference={reference} />}
 
         {tab === 'transcript' && (
@@ -342,5 +427,181 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
           ))}
       </div>
     </Card>
+  );
+}
+
+function ValueTile({ label, value, hint, warn }: { label: string; value: string; hint: string; warn?: boolean }) {
+  return (
+    <Card className={cn('p-4', warn && 'border-amber-300')}>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
+      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{hint}</p>
+    </Card>
+  );
+}
+
+function ScoreBar({ score, max = 5 }: { score: number; max?: number }) {
+  return (
+    <div className="flex gap-0.5" aria-label={`${score} of ${max}`}>
+      {Array.from({ length: max }, (_, i) => (
+        <span key={i} className={cn('h-2 w-5 rounded-sm', i < score ? (score >= 4 ? 'bg-emerald-500' : score === 3 ? 'bg-amber-400' : 'bg-red-400') : 'bg-muted')} />
+      ))}
+    </div>
+  );
+}
+
+const CREDIBILITY_VARIANT = { CONSERVATIVE: 'success', SUPPORTED: 'success', OPTIMISTIC: 'warning', UNSUBSTANTIATED: 'danger' } as const;
+
+function AssessmentView({ detail, assessment }: { detail: RequestDetail; assessment: RequestDetail['assessments'][number] | undefined }) {
+  if (!assessment) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {detail.assessmentStatus === 'FAILED'
+          ? 'The automatic assessment failed. Use "Retry assessment" above.'
+          : 'Kato is assessing the business value and development route. This usually takes under a minute.'}
+      </p>
+    );
+  }
+  const fin = assessment.financial as unknown as StoredFinancial;
+  const aut = assessment.autonomy as unknown as StoredAutonomy;
+  const criteria = [
+    ['Requirement clarity', aut.requirementClarity],
+    ['Testability', aut.testability],
+    ['Scope containment', aut.scopeContainment],
+    ['Integration simplicity', aut.integrationSimplicity],
+    ['Reversibility', aut.reversibility],
+    ['Pattern familiarity', aut.patternFamiliarity],
+  ] as const;
+  const stated = [n(detail.statedRevenueUsd), n(detail.statedEbitdaUsd), n(detail.statedCashFlowUsd)];
+  const assessed = [n(assessment.assessedRevenueUsd), n(assessment.assessedEbitdaUsd), n(assessment.assessedCashFlowUsd)];
+
+  return (
+    <div className="space-y-6 text-sm">
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold">Business value</h3>
+          <div className="flex items-center gap-2">
+            <Badge variant={CREDIBILITY_VARIANT[fin.credibility]}>{fin.credibility.toLowerCase()}</Badge>
+            <span className="text-xs text-muted-foreground">
+              v{assessment.version} · {formatDateTime(assessment.createdAt)}
+            </span>
+          </div>
+        </div>
+        <table className="w-full text-left">
+          <thead className="text-xs text-muted-foreground">
+            <tr>
+              <th className="py-1 font-medium">Annual USD</th>
+              <th className="py-1 text-right font-medium">Stated</th>
+              <th className="py-1 text-right font-medium">Assessed</th>
+              <th className="py-1 text-right font-medium">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {FINANCIAL_LENSES.map((l, i) => {
+              const delta = stated[i] != null && assessed[i] != null ? assessed[i]! - stated[i]! : null;
+              return (
+                <tr key={l.key} className="border-t">
+                  <td className="py-1.5">{l.label}</td>
+                  <td className="py-1.5 text-right tabular-nums text-muted-foreground">{formatUsd(stated[i])}</td>
+                  <td className="py-1.5 text-right font-medium tabular-nums">{formatUsd(assessed[i])}</td>
+                  <td className={cn('py-1.5 text-right tabular-nums text-xs', delta != null && delta < 0 ? 'text-red-600' : 'text-emerald-700')}>
+                    {delta == null || delta === 0 ? '—' : `${delta > 0 ? '+' : ''}${usd(delta)}`}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="text-xs text-muted-foreground">
+          Value score <span className="font-medium text-foreground">{assessment.valueScore}/100</span> · confidence {fin.confidence.toLowerCase()} · strategic alignment{' '}
+          {fin.strategicAlignment.score}/5{fin.paybackMonths != null ? ` · payback ≈ ${fin.paybackMonths} months` : ''}
+        </p>
+        <p>{fin.commentary}</p>
+        <div className="flex flex-wrap gap-1">
+          {fin.valueDrivers.map((d) => (
+            <Badge key={d} variant="outline">
+              {d.replace(/_/g, ' ').toLowerCase()}
+            </Badge>
+          ))}
+        </div>
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">Key assumptions</p>
+          <ul className="list-disc pl-5">
+            {fin.keyAssumptions.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        </div>
+        {fin.questionsForSponsor.length > 0 && (
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">Questions for the sponsor</p>
+            <ul className="list-disc pl-5">
+              {fin.questionsForSponsor.map((q, i) => (
+                <li key={i}>{q}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3 border-t pt-5">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold">Development route</h3>
+          <div className="flex items-center gap-2">
+            <RouteBadge route={assessment.recommendedRoute} />
+            <span className="text-xs tabular-nums text-muted-foreground">autonomy {assessment.autonomyScore}/100</span>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">{ROUTE_DESCRIPTIONS[assessment.recommendedRoute]}</p>
+        {detail.approvedRoute && detail.approvedRoute !== assessment.recommendedRoute && (
+          <p className="rounded-md bg-amber-50 p-2 text-xs text-amber-900">
+            Approved for the {ROUTE_LABELS[detail.approvedRoute]} route, overriding the recommendation. See the audit trail for the reason.
+          </p>
+        )}
+        <table className="w-full text-left">
+          <tbody>
+            {criteria.map(([label, c]) => (
+              <tr key={label} className="border-t align-top">
+                <td className="w-40 py-1.5 pr-2">{label}</td>
+                <td className="w-28 py-2">
+                  <ScoreBar score={c.score} />
+                </td>
+                <td className="py-1.5 text-xs text-muted-foreground">{c.reason}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">Risk flags</p>
+          {aut.blockers.length ? (
+            <ul className="list-disc pl-5 text-red-700">
+              {aut.blockers.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-emerald-700">None raised</p>
+          )}
+        </div>
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">Decision rules applied</p>
+          <ul className="list-disc pl-5">
+            {aut.rules.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">Required guardrails</p>
+          <ul className="list-disc pl-5">
+            {aut.guardrails.map((g, i) => (
+              <li key={i}>{g}</li>
+            ))}
+          </ul>
+        </div>
+        <p>{aut.rationale}</p>
+        <p className="text-[11px] text-muted-foreground">Assessed by {assessment.model}. Scores come from the model; the route and value score are computed by fixed rules.</p>
+      </section>
+    </div>
   );
 }

@@ -1,6 +1,8 @@
 # Kato — AI Software Factory request intake
 
-Kato is the conversational intake and demand-management portal for the Cassava Technologies AI Software Factory. Business users from any OpCo describe a need in plain language. Kato's AI business analyst asks follow-up questions and builds a standardised Business Requirements Document (BRD) live beside the chat. IT reviewers then triage, approve or reject requests in Kato, and an approval creates the Jira Epic or Story automatically.
+Kato is the conversational intake and demand-management portal for the Cassava Technologies AI Software Factory. Business users from any OpCo describe a need in plain language. Kato's AI business analyst asks follow-up questions and builds a standardised Business Requirements Document (BRD) live beside the chat, including a mandatory USD financial impact on revenue, EBITDA and cash flow.
+
+On submission Kato assesses each request's business value and the development route it should take (Autonomous, AI-assisted or Human-led), and publishes the BRD to Confluence. IT reviewers then triage, approve or reject requests in Kato, and an approval creates the Jira Epic or Story automatically.
 
 ```
  Requester ──chat──▶ /request ──▶ /api/chat ──redact──▶ LLM (Claude / OpenAI)
@@ -8,7 +10,9 @@ Kato is the conversational intake and demand-management portal for the Cassava T
                         │ live BRD       ▼
                         └──────── FeatureRequest.draftBrd (Postgres)
                                          │ submit → BRDDocument v1 (immutable)
- IT reviewer ──▶ /admin/dashboard ── start review → approve / reject
+                                         ├──▶ BullMQ ──▶ worker: value + route assessment (LLM + fixed rules)
+                                         └──▶ BullMQ ──▶ worker: publish BRD page ──▶ Confluence (system of record)
+ IT reviewer ──▶ /admin/dashboard ── start review → approve (choose route) / reject
                                          │ approve (one transaction)
                                          ▼
                                   JiraSyncTask (outbox) ──▶ BullMQ ──▶ worker ──▶ Jira REST v3
@@ -27,6 +31,8 @@ Kato is the conversational intake and demand-management portal for the Cassava T
 | 4 | Jira integration service and resilience queue | [src/lib/jira.ts](src/lib/jira.ts), [src/lib/queue.ts](src/lib/queue.ts), [src/worker/index.ts](src/worker/index.ts) |
 | 5 | Production Dockerfile and docker-compose | [Dockerfile](Dockerfile), [docker-compose.yml](docker-compose.yml) |
 
+Value, route and Confluence: assessment engine [src/lib/assessment.ts](src/lib/assessment.ts), route metadata [src/lib/routes.ts](src/lib/routes.ts), Confluence publisher [src/lib/confluence.ts](src/lib/confluence.ts).
+
 Supporting modules: lifecycle state machine [src/lib/lifecycle.ts](src/lib/lifecycle.ts), BRD schema and completeness [src/lib/brd.ts](src/lib/brd.ts), secret/PII redaction [src/lib/redact.ts](src/lib/redact.ts), SSO and role hydration [src/lib/auth.ts](src/lib/auth.ts).
 
 ## Key design decisions
@@ -42,6 +48,35 @@ Supporting modules: lifecycle state machine [src/lib/lifecycle.ts](src/lib/lifec
   - Permanent 4xx errors go straight to the DLQ. Dead-lettered tasks alert staff and show a **Retry Jira sync** button.
   - A reconciler re-enqueues tasks that never reached Redis.
   - Before creating an issue, the worker searches by the `kato-<n>` label, so a retry after a timed-out create never duplicates the issue.
+
+## Financial impact, value assessment and development route
+
+**Financial impact is mandatory.** A BRD can't be submitted until it states the annual USD effect on all three lenses (revenue growth, EBITDA and operating cash flow), with at least one non-zero, plus how the figures were calculated and the requester's confidence. Kato helps the requester quantify: it asks for the drivers (volumes, hours saved, ARPU, DSO days and so on), does the arithmetic, converts local currency to USD with a recorded FX rate, and errs low.
+
+**Assessment runs automatically after submission** (queue `kato-assessment`). An LLM acting as a Cassava finance and delivery assessor returns structured evidence:
+- its own conservative revenue, EBITDA and cash-flow estimates, a credibility rating for the requester's figures, value drivers, assumptions and questions for the sponsor
+- scores from 1 to 5 for requirement clarity, testability, scope, integrations, reversibility and pattern familiarity, plus risk flags (moves money, personal or regulated data, regulatory commitment, production infrastructure, safety-critical)
+
+Kato then applies **fixed, auditable rules** in `assessment.ts`:
+- **Value score (0–100):** 60% magnitude (log scale of the larger of EBITDA and cash flow, $25k → 0, $10M → 100), 25% strategic alignment, 15% evidence quality.
+- **Autonomy score (0–100):** weighted average of the six criteria.
+- **Route:** Autonomous at a score of 75 or more, AI-assisted at 50 or more, otherwise Human-led. Then the guardrails apply:
+  - Any risk flag caps the route at AI-assisted.
+  - Safety-critical work, or regulated money movement, is always Human-led.
+  - Requirement clarity of 2 or less is always Human-led.
+
+Thresholds are configurable. Assessments are versioned and immutable. Approval is blocked until an assessment completes (`KATO_REQUIRE_ASSESSMENT`). Reviewers choose the final route at approval, and overriding the recommendation needs a recorded reason. The route goes onto the Jira issue as a `route-*` label and into its description.
+
+The dashboard shows open and approved pipeline EBITDA, requests eligible for the autonomous route, stated vs assessed figures for each request, and filters and sorts by route, value score and EBITDA.
+
+## Confluence (system of record for BRDs)
+
+- Each submitted request gets one page, `KATO-00042 · <title>`, in `CONFLUENCE_SPACE_KEY` (optionally under `CONFLUENCE_PARENT_PAGE_ID`).
+- The page is regenerated on every change: submission, assessment, approval or rejection, and the Jira key. Confluence page history therefore mirrors the request's lifecycle.
+- Each page carries a **Page Properties** macro (reference, status, OpCo, sponsor, USD impact, value score, route, Jira link). Build a portfolio view with a Page Properties Report filtered on the label `kato-brd`.
+- Publishing goes through the `kato-confluence-sync` queue with retries and a dead-letter queue. Dead-lettered publishes alert staff, and the dashboard offers **Retry Confluence publish**.
+- Jira issues get a remote link to the Confluence page, and requesters see the link once their request is submitted.
+- Confluence uses the Jira base URL (`/wiki`) and credentials unless you override them. The service account needs permission to create and edit pages in the space.
 
 ## Local development
 
@@ -98,5 +133,6 @@ This runs `postgres`, `redis` (AOF, `noeviction`), a one-shot `migrate`, `app` o
 
 - Per-user rate limiting on `/api/chat`, and an in-app notification inbox (the data is already in `Notification`).
 - A Bull Board view of the DLQ for operators.
-- Unit tests for `redact.ts`, `brd.ts` completeness and `derivePriority`, plus an integration test for the approve → Jira path against a mocked Jira.
+- Unit tests for `redact.ts`, `brd.ts` completeness, `decideRoute`, `scoreValue` and `derivePriority`, plus integration tests for the approve → Jira and submit → Confluence paths against mocked Atlassian APIs.
+- Calibrate the value-score bands and autonomy thresholds with Finance and Engineering using the first few months of assessments.
 - Decide on data residency for the LLM provider. Kato never sends credentials, but BRDs may contain commercially sensitive content.

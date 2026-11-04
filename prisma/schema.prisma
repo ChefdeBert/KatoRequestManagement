@@ -1,5 +1,5 @@
 // Kato — data model
-// Audit tables (ConversationMessage, BRDDocument, ApprovalLog) are append-only.
+// Audit tables (ConversationMessage, BRDDocument, RequestAssessment, ApprovalLog) are append-only.
 // Immutability is enforced in PostgreSQL by triggers (see migrations/0002_audit_immutability).
 
 generator client {
@@ -59,6 +59,33 @@ enum ApprovalAction {
   JIRA_SYNCED
   JIRA_SYNC_FAILED
   JIRA_SYNC_RETRIED
+  ASSESSMENT_REQUESTED
+  ASSESSMENT_COMPLETED
+  ASSESSMENT_FAILED
+  CONFLUENCE_PUBLISHED
+  CONFLUENCE_SYNC_FAILED
+  CONFLUENCE_SYNC_RETRIED
+}
+
+/// How the AI Software Factory builds an approved request
+enum DevelopmentRoute {
+  AUTONOMOUS /// AI agents design, build, test and release; humans approve at PR/release gates
+  AI_ASSISTED /// Engineers lead, AI agents generate and test code under close supervision
+  HUMAN_LED /// Conventional engineering; AI used opportunistically
+}
+
+enum AssessmentStatus {
+  NOT_STARTED
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum SyncState {
+  NOT_SYNCED
+  PENDING
+  SYNCED
+  FAILED
 }
 
 enum JiraIssueType {
@@ -118,6 +145,28 @@ model FeatureRequest {
   jiraIssueUrl    String?
   rejectionReason String?
 
+  // Financial impact, annual USD. "stated" = requester's BRD, "assessed" = Kato value assessment
+  statedRevenueUsd    Decimal? @db.Decimal(15, 2)
+  statedEbitdaUsd     Decimal? @db.Decimal(15, 2)
+  statedCashFlowUsd   Decimal? @db.Decimal(15, 2)
+  assessedRevenueUsd  Decimal? @db.Decimal(15, 2)
+  assessedEbitdaUsd   Decimal? @db.Decimal(15, 2)
+  assessedCashFlowUsd Decimal? @db.Decimal(15, 2)
+  valueScore          Int? /// 0–100
+
+  // Development route
+  assessmentStatus AssessmentStatus  @default(NOT_STARTED)
+  autonomyScore    Int? /// 0–100
+  recommendedRoute DevelopmentRoute?
+  approvedRoute    DevelopmentRoute?
+
+  // Confluence (system of record for BRDs)
+  confluencePageId    String?   @unique
+  confluencePageUrl   String?
+  confluenceSyncState SyncState @default(NOT_SYNCED)
+  confluenceSyncedAt  DateTime?
+  confluenceLastError String?
+
   submittedAt     DateTime?
   reviewStartedAt DateTime?
   decidedAt       DateTime?
@@ -129,6 +178,7 @@ model FeatureRequest {
 
   messages      ConversationMessage[]
   brdDocuments  BRDDocument[]
+  assessments   RequestAssessment[]
   approvalLogs  ApprovalLog[]
   jiraSyncTasks JiraSyncTask[]
   notifications Notification[]
@@ -137,6 +187,8 @@ model FeatureRequest {
   @@index([opco])
   @@index([impact])
   @@index([requesterId, updatedAt])
+  @@index([recommendedRoute])
+  @@index([assessedEbitdaUsd])
 }
 
 /// Immutable transcript. Content is stored *after* secret redaction.
@@ -165,7 +217,37 @@ model BRDDocument {
   contentHash   String /// sha256 of canonical JSON
   generatedById String?
   generatedBy   User?          @relation(fields: [generatedById], references: [id])
+  assessments   RequestAssessment[]
   createdAt     DateTime       @default(now())
+
+  @@unique([requestId, version])
+}
+
+/// Immutable, versioned value & development-route assessment of a submitted BRD.
+/// The LLM scores the evidence; the route and value score are computed deterministically
+/// in src/lib/assessment.ts so the decision is explainable and auditable.
+model RequestAssessment {
+  id            String         @id @default(cuid())
+  requestId     String
+  request       FeatureRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  version       Int
+  brdDocumentId String
+  brdDocument   BRDDocument    @relation(fields: [brdDocumentId], references: [id], onDelete: Restrict)
+  model         String
+
+  // Business value (annual USD)
+  assessedRevenueUsd  Decimal @db.Decimal(15, 2)
+  assessedEbitdaUsd   Decimal @db.Decimal(15, 2)
+  assessedCashFlowUsd Decimal @db.Decimal(15, 2)
+  valueScore          Int
+  financial           Json /// credibility, commentary, assumptions, drivers, payback
+
+  // Development route
+  autonomyScore    Int
+  recommendedRoute DevelopmentRoute
+  autonomy         Json /// criteria scores, risk flags, blockers, guardrails, rationale
+
+  createdAt DateTime @default(now())
 
   @@unique([requestId, version])
 }

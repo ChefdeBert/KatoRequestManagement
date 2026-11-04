@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import type { JiraIssueType, Prisma, RequestStatus } from '@prisma/client';
-import { asDraft, brdSchema, brdToMarkdown, denormalise, formatRef, validateForSubmission, type BRD } from './brd';
+import type { DevelopmentRoute, JiraIssueType, Prisma, RequestStatus } from '@prisma/client';
+import { asDraft, brdSchema, brdToMarkdown, denormalise, formatRef, formatUsd, statedFinancials, validateForSubmission, type BRD } from './brd';
 import { buildIssuePayload } from './jira';
 import { notifyStaff, notifyUser } from './notify';
 import { prisma } from './prisma';
-import { enqueueJiraSync } from './queue';
+import { enqueueAssessment, enqueueConfluenceSync, enqueueJiraSync } from './queue';
+import { ROUTE_LABELS } from './routes';
 import type { SessionUser } from './auth';
 
 /**
@@ -52,6 +53,11 @@ function assertNotSelf(requesterId: string, actor: SessionUser) {
 
 const sha256 = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 
+/** Background follow-ups never fail the user-facing action; reconcilers/retry buttons cover gaps. */
+const background = (label: string, p: Promise<unknown>) => p.catch((err) => console.error(`[lifecycle] ${label} failed`, err));
+
+export const requireAssessmentForApproval = () => process.env.KATO_REQUIRE_ASSESSMENT !== 'false';
+
 // ── Requester actions ───────────────────────────────────────────────
 
 export async function getOrCreateDraft(userId: string) {
@@ -75,7 +81,14 @@ export async function submitRequest(id: string, user: SessionUser) {
 
   const reference = formatRef(r.number);
   const doc = await prisma.$transaction(async (tx) => {
-    await transition(tx, id, 'DRAFT', 'SUBMITTED', { submittedAt: new Date(), completeness: 100, ...denormalise(v.brd) });
+    await transition(tx, id, 'DRAFT', 'SUBMITTED', {
+      submittedAt: new Date(),
+      completeness: 100,
+      assessmentStatus: 'PENDING',
+      confluenceSyncState: 'PENDING',
+      ...denormalise(v.brd),
+      ...statedFinancials(v.brd),
+    });
     const last = await tx.bRDDocument.findFirst({ where: { requestId: id }, orderBy: { version: 'desc' }, select: { version: true } });
     const version = (last?.version ?? 0) + 1;
     const doc = await tx.bRDDocument.create({
@@ -94,12 +107,15 @@ export async function submitRequest(id: string, user: SessionUser) {
     return doc;
   });
 
+  await background('assessment enqueue', enqueueAssessment(id));
+  await background('confluence enqueue', enqueueConfluenceSync(id));
+
   await notifyStaff(
     {
       requestId: id,
       type: 'REQUEST_SUBMITTED',
       title: `New request ${reference}: ${v.brd.title}`,
-      body: `${user.name} submitted a ${v.brd.impact.toLowerCase()}-impact request for ${v.brd.businessUnit}.`,
+      body: `${user.name} submitted a ${v.brd.impact.toLowerCase()}-impact request for ${v.brd.businessUnit}, stating ${formatUsd(v.brd.financialImpact.ebitdaImpactUsd)}/yr EBITDA impact. Kato is assessing its value and development route.`,
       link: `/admin/dashboard?selected=${id}`,
     },
     user.id,
@@ -124,19 +140,58 @@ async function latestBrd(tx: Tx, requestId: string): Promise<BRD> {
   return brdSchema.parse(doc.content);
 }
 
-export async function approveRequest(id: string, actor: SessionUser, input: { issueType: JiraIssueType; comment?: string }) {
+export async function approveRequest(
+  id: string,
+  actor: SessionUser,
+  input: { issueType: JiraIssueType; route: DevelopmentRoute; routeOverrideReason?: string; comment?: string },
+) {
   const r = await load(id);
   assertNotSelf(r.requesterId, actor);
+  if (requireAssessmentForApproval() && r.assessmentStatus !== 'COMPLETED') {
+    throw new LifecycleError(409, 'The value and development-route assessment must complete before approval. Re-run it if it failed.');
+  }
+  const overridden = !!r.recommendedRoute && input.route !== r.recommendedRoute;
+  if (overridden && (input.routeOverrideReason?.trim().length ?? 0) < 10) {
+    throw new LifecycleError(422, `Overriding the recommended ${ROUTE_LABELS[r.recommendedRoute!]} route needs a reason of at least 10 characters`);
+  }
 
   const task = await prisma.$transaction(async (tx) => {
-    await transition(tx, id, 'UNDER_IT_REVIEW', 'APPROVED', { decidedAt: new Date(), decidedById: actor.id });
+    await transition(tx, id, 'UNDER_IT_REVIEW', 'APPROVED', { decidedAt: new Date(), decidedById: actor.id, approvedRoute: input.route });
     const brd = await latestBrd(tx, id);
-    const payload = buildIssuePayload(r, brd, input.issueType) as unknown as Prisma.InputJsonValue;
+    const fresh = await tx.featureRequest.findUniqueOrThrow({ where: { id } });
+    const payload = buildIssuePayload(fresh, brd, input.issueType, {
+      route: input.route,
+      confluenceUrl: fresh.confluencePageUrl,
+      assessed:
+        fresh.assessedEbitdaUsd != null
+          ? {
+              revenueUsd: Number(fresh.assessedRevenueUsd ?? 0),
+              ebitdaUsd: Number(fresh.assessedEbitdaUsd),
+              cashFlowUsd: Number(fresh.assessedCashFlowUsd ?? 0),
+              valueScore: fresh.valueScore ?? 0,
+              autonomyScore: fresh.autonomyScore ?? 0,
+            }
+          : null,
+    }) as unknown as Prisma.InputJsonValue;
     // Outbox: the task row commits atomically with the approval
     const task = await tx.jiraSyncTask.create({ data: { requestId: id, issueType: input.issueType, payload } });
     await tx.approvalLog.createMany({
       data: [
-        { requestId: id, actorId: actor.id, action: 'APPROVED', fromStatus: 'UNDER_IT_REVIEW', toStatus: 'APPROVED', comment: input.comment, metadata: { issueType: input.issueType } },
+        {
+          requestId: id,
+          actorId: actor.id,
+          action: 'APPROVED',
+          fromStatus: 'UNDER_IT_REVIEW',
+          toStatus: 'APPROVED',
+          comment: input.comment,
+          metadata: {
+            issueType: input.issueType,
+            route: input.route,
+            recommendedRoute: r.recommendedRoute,
+            routeOverridden: overridden,
+            routeOverrideReason: overridden ? input.routeOverrideReason : null,
+          },
+        },
         { requestId: id, actorId: actor.id, action: 'JIRA_SYNC_QUEUED', metadata: { taskId: task.id, payload } },
       ],
     });
@@ -144,14 +199,15 @@ export async function approveRequest(id: string, actor: SessionUser, input: { is
   });
 
   // If Redis is down the PENDING task is picked up by the worker's outbox reconciler.
-  await enqueueJiraSync(task.id).catch((err) => console.error('[approve] enqueue failed; reconciler will retry', task.id, err));
+  await background('jira enqueue', enqueueJiraSync(task.id));
+  await background('confluence enqueue', enqueueConfluenceSync(id));
 
   await notifyUser({
     userId: r.requesterId,
     requestId: id,
     type: 'REQUEST_APPROVED',
     title: `${formatRef(r.number)} approved`,
-    body: `Your request "${r.title}" was approved by ${actor.name}. A Jira ${input.issueType === 'EPIC' ? 'Epic' : 'Story'} is being created for engineering.${input.comment ? `\n\nReviewer note: ${input.comment}` : ''}`,
+    body: `Your request "${r.title}" was approved by ${actor.name} for the ${ROUTE_LABELS[input.route]} development route. A Jira ${input.issueType === 'EPIC' ? 'Epic' : 'Story'} is being created for engineering.${input.comment ? `\n\nReviewer note: ${input.comment}` : ''}`,
     link: `/request?id=${id}`,
   });
   return task;
@@ -168,6 +224,7 @@ export async function rejectRequest(id: string, actor: SessionUser, reason: stri
       data: { requestId: id, actorId: actor.id, action: 'REJECTED', fromStatus: 'UNDER_IT_REVIEW', toStatus: 'REJECTED', comment: reason },
     });
   });
+  await background('confluence enqueue', enqueueConfluenceSync(id));
 
   await notifyUser({
     userId: r.requesterId,
@@ -193,4 +250,24 @@ export async function retryJiraSync(taskId: string, actor: SessionUser) {
     prisma.approvalLog.create({ data: { requestId: task.requestId, actorId: actor.id, action: 'JIRA_SYNC_RETRIED', metadata: { taskId } } }),
   ]);
   await enqueueJiraSync(taskId, { retryOf: taskId });
+}
+
+export async function rerunAssessment(id: string, actor: SessionUser) {
+  const r = await load(id);
+  if (!['SUBMITTED', 'UNDER_IT_REVIEW'].includes(r.status)) throw new LifecycleError(409, 'Only requests awaiting a decision can be re-assessed');
+  await prisma.$transaction([
+    prisma.featureRequest.update({ where: { id }, data: { assessmentStatus: 'PENDING' } }),
+    prisma.approvalLog.create({ data: { requestId: id, actorId: actor.id, action: 'ASSESSMENT_REQUESTED' } }),
+  ]);
+  await enqueueAssessment(id);
+}
+
+export async function retryConfluenceSync(id: string, actor: SessionUser) {
+  const r = await load(id);
+  if (r.status === 'DRAFT') throw new LifecycleError(409, 'Drafts are not published to Confluence');
+  await prisma.$transaction([
+    prisma.featureRequest.update({ where: { id }, data: { confluenceSyncState: 'PENDING' } }),
+    prisma.approvalLog.create({ data: { requestId: id, actorId: actor.id, action: 'CONFLUENCE_SYNC_RETRIED' } }),
+  ]);
+  await enqueueConfluenceSync(id);
 }

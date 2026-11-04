@@ -1,11 +1,12 @@
 'use client';
 
-import type { JiraSyncStatus, RequestStatus } from '@prisma/client';
-import { CheckCircle2, Loader2, MessageSquarePlus, PlayCircle, RotateCcw, XCircle } from 'lucide-react';
+import type { AssessmentStatus, DevelopmentRoute, JiraSyncStatus, RequestStatus, SyncState } from '@prisma/client';
+import { BookOpen, CheckCircle2, Gauge, Loader2, MessageSquarePlus, PlayCircle, RotateCcw, XCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, Label, Textarea } from '@/components/ui';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { ROUTES, ROUTE_DESCRIPTIONS, ROUTE_LABELS } from '@/lib/routes';
 import { cn } from '@/lib/utils';
 
 type Props = {
@@ -13,6 +14,9 @@ type Props = {
   reference: string;
   status: RequestStatus;
   isOwnRequest: boolean;
+  requireAssessment: boolean;
+  assessment: { status: AssessmentStatus; recommendedRoute: DevelopmentRoute | null; autonomyScore: number | null };
+  confluenceState: SyncState;
   jiraTask?: { id: string; status: JiraSyncStatus } | null;
 };
 
@@ -24,7 +28,7 @@ async function post(url: string, body?: unknown) {
   }
 }
 
-export function AdminActions({ requestId, reference, status, isOwnRequest, jiraTask }: Props) {
+export function AdminActions({ requestId, reference, status, isOwnRequest, requireAssessment, assessment, confluenceState, jiraTask }: Props) {
   const router = useRouter();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,10 +36,15 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [issueType, setIssueType] = useState<'EPIC' | 'STORY'>('EPIC');
+  const [route, setRoute] = useState<DevelopmentRoute>(assessment.recommendedRoute ?? 'AI_ASSISTED');
+  const [overrideReason, setOverrideReason] = useState('');
   const [approveNote, setApproveNote] = useState('');
   const [reason, setReason] = useState('');
 
   const url = `/api/admin/requests/${requestId}/transition`;
+  const overridden = !!assessment.recommendedRoute && route !== assessment.recommendedRoute;
+  const assessmentBlocks = requireAssessment && assessment.status !== 'COMPLETED';
+  const canRerun = ['SUBMITTED', 'UNDER_IT_REVIEW'].includes(status);
 
   async function run(key: string, fn: () => Promise<void>, after?: () => void) {
     setPending(key);
@@ -51,8 +60,6 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
     }
   }
 
-  const decisionBlocked = isOwnRequest;
-
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
@@ -66,15 +73,46 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
           <>
             <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-600/90" disabled={!!pending || decisionBlocked}>
+                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-600/90" disabled={!!pending || isOwnRequest || assessmentBlocks}>
                   <CheckCircle2 /> Approve
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="max-w-xl">
                 <DialogHeader>
                   <DialogTitle>Approve {reference}</DialogTitle>
-                  <DialogDescription>Kato will create the Jira issue for engineering and notify the requester.</DialogDescription>
+                  <DialogDescription>Kato will create the Jira issue, update the BRD in Confluence and notify the requester.</DialogDescription>
                 </DialogHeader>
+
+                <div className="space-y-2">
+                  <Label>Development route</Label>
+                  <div className="grid gap-2">
+                    {ROUTES.map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setRoute(r)}
+                        className={cn('rounded-md border p-3 text-left text-sm', route === r ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-accent')}
+                      >
+                        <p className="font-medium">
+                          {ROUTE_LABELS[r]}
+                          {assessment.recommendedRoute === r && (
+                            <span className="ml-2 text-xs font-normal text-emerald-700">
+                              Recommended{assessment.autonomyScore != null ? ` · autonomy ${assessment.autonomyScore}/100` : ''}
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{ROUTE_DESCRIPTIONS[r]}</p>
+                      </button>
+                    ))}
+                  </div>
+                  {overridden && (
+                    <div className="space-y-1">
+                      <Label htmlFor="override-reason">Why override the recommendation? (recorded in the audit trail)</Label>
+                      <Textarea id="override-reason" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} rows={2} />
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-2">
                   <Label>Jira issue type</Label>
                   <div className="grid grid-cols-2 gap-2">
@@ -91,9 +129,10 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
                     ))}
                   </div>
                 </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="approve-note">Note to requester (optional)</Label>
-                  <Textarea id="approve-note" value={approveNote} onChange={(e) => setApproveNote(e.target.value)} rows={3} />
+                  <Textarea id="approve-note" value={approveNote} onChange={(e) => setApproveNote(e.target.value)} rows={2} />
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setApproveOpen(false)}>
@@ -101,12 +140,23 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
                   </Button>
                   <Button
                     className="bg-emerald-600 hover:bg-emerald-600/90"
-                    disabled={pending === 'approve'}
+                    disabled={pending === 'approve' || (overridden && overrideReason.trim().length < 10)}
                     onClick={() =>
-                      run('approve', () => post(url, { action: 'approve', issueType, comment: approveNote || undefined }), () => setApproveOpen(false))
+                      run(
+                        'approve',
+                        () =>
+                          post(url, {
+                            action: 'approve',
+                            issueType,
+                            route,
+                            routeOverrideReason: overridden ? overrideReason : undefined,
+                            comment: approveNote || undefined,
+                          }),
+                        () => setApproveOpen(false),
+                      )
                     }
                   >
-                    {pending === 'approve' && <Loader2 className="animate-spin" />} Approve & create {issueType === 'EPIC' ? 'Epic' : 'Story'}
+                    {pending === 'approve' && <Loader2 className="animate-spin" />} Approve · {ROUTE_LABELS[route]} · {issueType === 'EPIC' ? 'Epic' : 'Story'}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -114,7 +164,7 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
 
             <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" variant="destructive" disabled={!!pending || decisionBlocked}>
+                <Button size="sm" variant="destructive" disabled={!!pending || isOwnRequest}>
                   <XCircle /> Reject
                 </Button>
               </DialogTrigger>
@@ -130,7 +180,7 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
                     value={reason}
                     onChange={(e) => setReason(e.target.value)}
                     rows={5}
-                    placeholder="e.g. Already covered by the Group ERP programme (AISF-1042). Please work with the SAP CoE instead."
+                    placeholder="e.g. The financial case is not yet supported: please quantify hours saved per month with Finance."
                   />
                   <p className="text-xs text-muted-foreground">{reason.trim().length < 10 ? `At least 10 characters (${reason.trim().length}/10)` : 'Ready'}</p>
                 </div>
@@ -151,6 +201,19 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
           </>
         )}
 
+        {canRerun && (
+          <Button size="sm" variant="outline" onClick={() => run('assess', () => post(`/api/admin/requests/${requestId}/assess`))} disabled={!!pending}>
+            {pending === 'assess' ? <Loader2 className="animate-spin" /> : <Gauge />}
+            {assessment.status === 'FAILED' ? 'Retry assessment' : 'Re-run assessment'}
+          </Button>
+        )}
+
+        {confluenceState === 'FAILED' && (
+          <Button size="sm" variant="outline" onClick={() => run('confluence', () => post(`/api/admin/requests/${requestId}/confluence`))} disabled={!!pending}>
+            {pending === 'confluence' ? <Loader2 className="animate-spin" /> : <BookOpen />} Retry Confluence publish
+          </Button>
+        )}
+
         {jiraTask && ['DEAD_LETTERED', 'FAILED'].includes(jiraTask.status) && (
           <Button size="sm" variant="outline" onClick={() => run('retry', () => post(`/api/admin/jira/${jiraTask.id}/retry`))} disabled={!!pending}>
             {pending === 'retry' ? <Loader2 className="animate-spin" /> : <RotateCcw />} Retry Jira sync
@@ -158,8 +221,15 @@ export function AdminActions({ requestId, reference, status, isOwnRequest, jiraT
         )}
       </div>
 
-      {decisionBlocked && status === 'UNDER_IT_REVIEW' && (
+      {status === 'UNDER_IT_REVIEW' && isOwnRequest && (
         <p className="text-xs text-muted-foreground">You raised this request, so another reviewer must approve or reject it.</p>
+      )}
+      {status === 'UNDER_IT_REVIEW' && assessmentBlocks && (
+        <p className="text-xs text-amber-700">
+          {assessment.status === 'FAILED'
+            ? 'The value and route assessment failed — re-run it before approving.'
+            : 'Approval unlocks once the value and development-route assessment completes.'}
+        </p>
       )}
 
       <form

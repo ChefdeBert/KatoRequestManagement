@@ -22,6 +22,7 @@ type Props = {
     jiraIssueUrl: string | null;
     rejectionReason: string | null;
     submittedAt: string | null;
+    confluencePageUrl: string | null;
   };
   initialMessages: UIMessage[];
   initialDraft: BRDDraft;
@@ -289,7 +290,11 @@ function BrdUpdateChip({ part }: { part: ToolPart }) {
 function StatusPanel({ request }: { request: Props['request'] }) {
   const copy: Record<RequestStatus, React.ReactNode> = {
     DRAFT: null,
-    SUBMITTED: <>Submitted {formatDateTime(request.submittedAt)}. The IT team has been notified and will pick it up for review.</>,
+    SUBMITTED: (
+      <>
+        Submitted {formatDateTime(request.submittedAt)}. Kato is assessing its business value and development route, and the IT team has been notified.
+      </>
+    ),
     UNDER_IT_REVIEW: <>The IT team is reviewing your request. You&apos;ll be notified of the decision.</>,
     APPROVED: (
       <>
@@ -316,6 +321,15 @@ function StatusPanel({ request }: { request: Props['request'] }) {
   return (
     <div className="border-t bg-muted/40 p-4 text-sm">
       <p>{copy[request.status]}</p>
+      {request.confluencePageUrl && (
+        <p className="mt-1 text-xs">
+          Your BRD is stored in Confluence:{' '}
+          <a className="font-medium underline" href={request.confluencePageUrl} target="_blank" rel="noreferrer">
+            open the BRD page
+          </a>
+          .
+        </p>
+      )}
       <p className="mt-1 text-xs text-muted-foreground">This conversation is read-only. Start a new request to raise something else.</p>
     </div>
   );

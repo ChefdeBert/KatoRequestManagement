@@ -50,6 +50,7 @@ export default async function RequestPage({ searchParams }: { searchParams: Prom
         jiraIssueUrl: fr.jiraIssueUrl,
         rejectionReason: fr.rejectionReason,
         submittedAt: fr.submittedAt?.toISOString() ?? null,
+        confluencePageUrl: fr.confluencePageUrl,
       }}
       initialMessages={initialMessages}
       initialDraft={asDraft(fr.draftBrd)}

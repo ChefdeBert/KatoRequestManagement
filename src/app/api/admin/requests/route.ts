@@ -2,6 +2,8 @@ import { getCurrentUser, isStaff, jsonError } from '@/lib/auth';
 import { listRequests, parseFilters } from '@/lib/admin-queries';
 import { formatRef } from '@/lib/brd';
 
+const num = (d: { toNumber(): number } | null) => (d ? d.toNumber() : null);
+
 /** JSON view of the admin queue (for integrations / reporting). */
 export async function GET(req: Request) {
   const user = await getCurrentUser();
@@ -19,6 +21,15 @@ export async function GET(req: Request) {
       impact: r.impact,
       urgency: r.urgency,
       requester: r.requester,
+      financialImpactUsd: {
+        stated: { revenue: num(r.statedRevenueUsd), ebitda: num(r.statedEbitdaUsd), cashFlow: num(r.statedCashFlowUsd) },
+        assessed: { revenue: num(r.assessedRevenueUsd), ebitda: num(r.assessedEbitdaUsd), cashFlow: num(r.assessedCashFlowUsd) },
+      },
+      valueScore: r.valueScore,
+      assessmentStatus: r.assessmentStatus,
+      recommendedRoute: r.recommendedRoute,
+      approvedRoute: r.approvedRoute,
+      confluencePageUrl: r.confluencePageUrl,
       jiraIssueKey: r.jiraIssueKey,
       submittedAt: r.submittedAt,
     })),

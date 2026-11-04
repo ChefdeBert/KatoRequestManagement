@@ -1,8 +1,11 @@
-import type { FeatureRequest, JiraIssueType, Prisma } from '@prisma/client';
+import type { DevelopmentRoute, FeatureRequest, JiraIssueType, Prisma } from '@prisma/client';
 import { UnrecoverableError } from 'bullmq';
-import { OPCO_LABELS, formatRef, type BRD, type LevelValue } from './brd';
+import { atlassianFetch, basicAuth } from './atlassian';
+import { FINANCIAL_LENSES, OPCO_LABELS, formatRef, formatUsd, type BRD, type LevelValue } from './brd';
 import { notifyStaff, notifyUser } from './notify';
 import { prisma } from './prisma';
+import { enqueueConfluenceSync } from './queue';
+import { ROUTE_LABELS } from './routes';
 import { publicUrl } from './utils';
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -14,7 +17,7 @@ function cfg() {
   }
   return {
     baseUrl,
-    auth: 'Basic ' + Buffer.from(`${process.env.JIRA_EMAIL}:${process.env.JIRA_API_TOKEN}`).toString('base64'),
+    auth: basicAuth(process.env.JIRA_EMAIL!, process.env.JIRA_API_TOKEN!),
     projectKey: process.env.JIRA_PROJECT_KEY,
     issueTypes: { EPIC: process.env.JIRA_EPIC_ISSUE_TYPE ?? 'Epic', STORY: process.env.JIRA_STORY_ISSUE_TYPE ?? 'Story' },
     setPriority: process.env.JIRA_SET_PRIORITY !== 'false',
@@ -40,47 +43,10 @@ function parseJson<T>(raw: string | undefined, fallback: T): T {
 
 // ── HTTP ────────────────────────────────────────────────────────────
 
-export class JiraHttpError extends Error {
-  constructor(
-    public status: number,
-    public body: unknown,
-  ) {
-    super(`Jira HTTP ${status}: ${typeof body === 'string' ? body : JSON.stringify(body)}`.slice(0, 2000));
-  }
-  /** 408/409/429/5xx are transient; other 4xx are payload/permission problems → DLQ immediately. */
-  get retryable() {
-    return this.status >= 500 || [408, 409, 425, 429].includes(this.status);
-  }
-}
-
 async function jira<T>(path: string, init: RequestInit = {}): Promise<T> {
   const c = cfg();
-  let res: Response;
-  try {
-    res = await fetch(`${c.baseUrl}${path}`, {
-      ...init,
-      headers: { Authorization: c.auth, Accept: 'application/json', 'Content-Type': 'application/json', ...init.headers },
-      signal: AbortSignal.timeout(20_000),
-    });
-  } catch (err) {
-    throw new Error(`Jira network error: ${(err as Error).message}`); // retryable
-  }
-  const text = await res.text();
-  const body = text ? safeJson(text) : null;
-  if (!res.ok) {
-    const e = new JiraHttpError(res.status, body);
-    throw e.retryable ? e : new UnrecoverableError(e.message);
-  }
-  return body as T;
+  return (await atlassianFetch<T>('Jira', c.baseUrl, c.auth, path, init)) as T;
 }
-
-const safeJson = (t: string) => {
-  try {
-    return JSON.parse(t);
-  } catch {
-    return t;
-  }
-};
 
 // ── Atlassian Document Format builders ──────────────────────────────
 
@@ -94,16 +60,41 @@ const bullets = (items: string[]): AdfNode =>
     : p(txt('None recorded', [{ type: 'em' }]));
 const strong = (label: string, value: string) => p(txt(`${label}: `, [{ type: 'strong' }]), txt(value || '—'));
 
-function buildDescription(brd: BRD, reference: string, katoUrl: string): AdfNode {
+export type IssueContext = {
+  route: DevelopmentRoute;
+  assessed?: { revenueUsd: number; ebitdaUsd: number; cashFlowUsd: number; valueScore: number; autonomyScore: number } | null;
+  confluenceUrl?: string | null;
+};
+
+const link = (text: string, href: string) => txt(text, [{ type: 'link', attrs: { href } }]);
+
+function buildDescription(brd: BRD, reference: string, katoUrl: string, ctx: IssueContext): AdfNode {
+  const assessed = ctx.assessed;
   return {
     type: 'doc',
     version: 1,
     content: [
-      p(txt('Created by Kato from an approved request. '), txt(`${reference} in Kato`, [{ type: 'link', attrs: { href: katoUrl } }])),
+      p(
+        txt('Created by Kato from an approved request. '),
+        link(`${reference} in Kato`, katoUrl),
+        ...(ctx.confluenceUrl ? [txt(' · '), link('BRD in Confluence', ctx.confluenceUrl)] : []),
+      ),
+      strong('Development route', `${ROUTE_LABELS[ctx.route]}${assessed ? ` (autonomy score ${assessed.autonomyScore}/100)` : ''}`),
       strong('Operating company', OPCO_LABELS[brd.opco]),
       strong('Business unit', brd.businessUnit),
       strong('Department', brd.department),
       strong('Business sponsor', [brd.sponsor.name, brd.sponsor.title].filter(Boolean).join(', ')),
+      h(2, 'Financial impact (annual, USD)'),
+      ...FINANCIAL_LENSES.map((l) =>
+        strong(
+          l.label,
+          `${formatUsd(brd.financialImpact[l.key])} stated${
+            assessed ? ` · ${formatUsd(l.key === 'revenueGrowthUsd' ? assessed.revenueUsd : l.key === 'ebitdaImpactUsd' ? assessed.ebitdaUsd : assessed.cashFlowUsd)} assessed` : ''
+          }`,
+        ),
+      ),
+      ...(assessed ? [strong('Value score', `${assessed.valueScore}/100`)] : []),
+      strong('Basis', brd.financialImpact.basis),
       h(2, 'Problem statement'),
       p(txt(brd.problemStatement)),
       h(2, 'Request summary'),
@@ -140,7 +131,7 @@ export function katoLabel(request: Pick<FeatureRequest, 'number'>) {
 }
 
 /** Pure: build the Jira create-issue body. Stored on JiraSyncTask.payload for audit. */
-export function buildIssuePayload(request: FeatureRequest, brd: BRD, issueType: JiraIssueType) {
+export function buildIssuePayload(request: FeatureRequest, brd: BRD, issueType: JiraIssueType, ctx: IssueContext) {
   const c = cfg();
   const reference = formatRef(request.number);
   const katoUrl = publicUrl(`/admin/dashboard?selected=${request.id}`);
@@ -148,8 +139,8 @@ export function buildIssuePayload(request: FeatureRequest, brd: BRD, issueType: 
     project: { key: c.projectKey },
     issuetype: { name: c.issueTypes[issueType] },
     summary: `${brd.title} [${reference}]`.slice(0, 254),
-    description: buildDescription(brd, reference, katoUrl),
-    labels: ['kato', katoLabel(request), `opco-${brd.opco.toLowerCase().replace(/_/g, '-')}`],
+    description: buildDescription(brd, reference, katoUrl, ctx),
+    labels: ['kato', katoLabel(request), `opco-${brd.opco.toLowerCase().replace(/_/g, '-')}`, `route-${ctx.route.toLowerCase().replace(/_/g, '-')}`],
   };
   if (c.setPriority) fields.priority = { name: c.priorityMap[derivePriority(brd.impact, brd.urgency)] };
   if (issueType === 'EPIC' && c.epicNameField) fields[c.epicNameField] = brd.title.slice(0, 254);
@@ -163,12 +154,18 @@ export function buildIssuePayload(request: FeatureRequest, brd: BRD, issueType: 
     urgency: brd.urgency,
     katoUrl,
     targetDate: brd.targetDate,
+    route: ROUTE_LABELS[ctx.route],
+    confluenceUrl: ctx.confluenceUrl ?? undefined,
+    revenueUsd: String(ctx.assessed?.revenueUsd ?? brd.financialImpact.revenueGrowthUsd),
+    ebitdaUsd: String(ctx.assessed?.ebitdaUsd ?? brd.financialImpact.ebitdaImpactUsd),
+    cashFlowUsd: String(ctx.assessed?.cashFlowUsd ?? brd.financialImpact.cashFlowImpactUsd),
+    valueScore: ctx.assessed ? String(ctx.assessed.valueScore) : undefined,
   };
   for (const [key, spec] of Object.entries(c.customFields)) {
     const value = values[key];
     if (!value) continue;
     const [fieldId, kind] = spec.split(':');
-    fields[fieldId] = kind === 'option' ? { value } : value;
+    fields[fieldId] = kind === 'option' ? { value } : kind === 'number' ? Number(value) : value;
   }
   return { fields };
 }
@@ -191,13 +188,11 @@ async function createIssue(payload: unknown) {
   return jira<CreatedIssue>('/rest/api/3/issue', { method: 'POST', body: JSON.stringify(payload) });
 }
 
-async function addRemoteLink(issueKey: string, requestId: string, reference: string) {
+/** Same globalId → Jira updates the link instead of duplicating it. */
+async function addRemoteLink(issueKey: string, globalId: string, url: string, title: string) {
   await jira(`/rest/api/3/issue/${issueKey}/remotelink`, {
     method: 'POST',
-    body: JSON.stringify({
-      globalId: `kato:${requestId}`, // same globalId → Jira updates instead of duplicating
-      object: { url: publicUrl(`/admin/dashboard?selected=${requestId}`), title: `${reference} — Kato request & BRD` },
-    }),
+    body: JSON.stringify({ globalId, object: { url, title } }),
   });
 }
 
@@ -216,9 +211,11 @@ export async function syncTaskToJira(taskId: string) {
   const issue = existing ?? (await createIssue(task.payload));
   const issueUrl = `${cfg().baseUrl}/browse/${issue.key}`;
 
-  await addRemoteLink(issue.key, request.id, reference).catch((err) =>
-    console.warn(`[jira] remote link failed for ${issue.key} (non-fatal)`, err),
-  );
+  const links: [string, string, string][] = [[`kato:${request.id}`, publicUrl(`/admin/dashboard?selected=${request.id}`), `${reference} — Kato request`]];
+  if (request.confluencePageUrl) links.push([`kato-confluence:${request.id}`, request.confluencePageUrl, `${reference} — BRD (Confluence)`]);
+  for (const [globalId, url, title] of links) {
+    await addRemoteLink(issue.key, globalId, url, title).catch((err) => console.warn(`[jira] remote link failed for ${issue.key} (non-fatal)`, err));
+  }
 
   const response = { ...issue, reusedExisting: Boolean(existing) } as unknown as Prisma.InputJsonValue;
   await prisma.$transaction([
@@ -245,6 +242,7 @@ export async function syncTaskToJira(taskId: string) {
     body: `Engineering has been handed your request "${request.title}". Track it in Jira: ${issueUrl}`,
     link: `/request?id=${request.id}`,
   });
+  await enqueueConfluenceSync(request.id).catch((e) => console.error('[jira] confluence enqueue failed', e)); // page shows the Jira key
   return issue.key;
 }
 

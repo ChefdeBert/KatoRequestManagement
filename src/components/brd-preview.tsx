@@ -1,6 +1,6 @@
 // Server- and client-safe (no hooks). Renders a partial or complete BRD defensively,
 // because during streaming the tool input may be half-formed.
-import { OPCO_LABELS, type BRDDraft, type OpCoValue } from '@/lib/brd';
+import { FINANCIAL_LENSES, OPCO_LABELS, formatUsd, type BRDDraft, type OpCoValue } from '@/lib/brd';
 import { cn } from '@/lib/utils';
 import { LevelBadge } from './status-badge';
 
@@ -138,7 +138,11 @@ export function BrdPreview({
         )}
       </Section>
 
-      <Section n={6} title="Related tickets & systems">
+      <Section n={6} title="Financial impact (USD, annual)" missing={m.has('financialImpact')}>
+        <FinancialImpact draft={draft} />
+      </Section>
+
+      <Section n={7} title="Related tickets & systems">
         {refs.length ? (
           <ul className="space-y-1">
             {refs.map((r, i) => (
@@ -155,7 +159,7 @@ export function BrdPreview({
       </Section>
 
       {extras.length > 0 && (
-        <Section n={7} title="Context">
+        <Section n={8} title="Context">
           {extras.map(([label, items]) => (
             <div key={label}>
               <p className="font-medium">{label}</p>
@@ -166,10 +170,51 @@ export function BrdPreview({
       )}
 
       {openQs.length > 0 && (
-        <Section n={extras.length ? 8 : 7} title="Open questions for IT">
+        <Section n={extras.length ? 9 : 8} title="Open questions for IT">
           <Bullets items={openQs} />
         </Section>
       )}
     </article>
+  );
+}
+
+function FinancialImpact({ draft }: { draft: BRDDraft }) {
+  const f: NonNullable<BRDDraft['financialImpact']> = draft.financialImpact ?? {};
+  const val = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-3 gap-2">
+        {FINANCIAL_LENSES.map((l) => {
+          const v = val(f[l.key]);
+          return (
+            <div key={l.key} className="rounded-md border bg-muted/30 p-2.5">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{l.short} / yr</p>
+              <p className={cn('mt-0.5 text-base font-semibold tabular-nums', v === undefined && 'text-muted-foreground/60')}>
+                {v === undefined ? 'Pending' : formatUsd(v, { compact: Math.abs(v) >= 100_000 })}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+      {str(f.basis) ? (
+        <p>
+          <span className="text-muted-foreground">Basis: </span>
+          {f.basis}
+        </p>
+      ) : (
+        <Pending>Kato will help you quantify the revenue, EBITDA and cash-flow effect in USD</Pending>
+      )}
+      <p className="text-xs text-muted-foreground">
+        {[
+          f.confidence && `Confidence: ${f.confidence.toLowerCase()}`,
+          `Horizon: ${val(f.horizonYears) ?? 3} years`,
+          val(f.oneOffCashBenefitUsd) !== undefined && `One-off cash benefit: ${formatUsd(f.oneOffCashBenefitUsd)}`,
+          val(f.implementationBudgetUsd) !== undefined && `Expected budget: ${formatUsd(f.implementationBudgetUsd)}`,
+          str(f.fxNote) && `FX: ${f.fxNote}`,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      </p>
+    </div>
   );
 }

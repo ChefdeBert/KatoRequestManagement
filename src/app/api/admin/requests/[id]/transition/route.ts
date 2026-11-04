@@ -5,7 +5,13 @@ import { addComment, approveRequest, rejectRequest, startReview } from '@/lib/li
 
 const bodySchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('start_review'), comment: z.string().trim().max(4000).optional() }),
-  z.object({ action: z.literal('approve'), issueType: z.enum(['EPIC', 'STORY']), comment: z.string().trim().max(4000).optional() }),
+  z.object({
+    action: z.literal('approve'),
+    issueType: z.enum(['EPIC', 'STORY']),
+    route: z.enum(['AUTONOMOUS', 'AI_ASSISTED', 'HUMAN_LED']),
+    routeOverrideReason: z.string().trim().max(2000).optional(),
+    comment: z.string().trim().max(4000).optional(),
+  }),
   z.object({ action: z.literal('reject'), reason: z.string().trim().min(10, 'Please give a reason of at least 10 characters').max(4000) }),
   z.object({ action: z.literal('comment'), comment: z.string().trim().min(1).max(4000) }),
 ]);
@@ -25,7 +31,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         await startReview(id, user, body.comment || undefined);
         break;
       case 'approve': {
-        const task = await approveRequest(id, user, { issueType: body.issueType, comment: body.comment || undefined });
+        const task = await approveRequest(id, user, {
+          issueType: body.issueType,
+          route: body.route,
+          routeOverrideReason: body.routeOverrideReason || undefined,
+          comment: body.comment || undefined,
+        });
         return Response.json({ ok: true, jiraSyncTaskId: task.id });
       }
       case 'reject':

@@ -8,7 +8,9 @@ export type NotificationType =
   | 'REQUEST_APPROVED'
   | 'JIRA_CREATED'
   | 'REQUEST_REJECTED'
-  | 'JIRA_SYNC_FAILED';
+  | 'JIRA_SYNC_FAILED'
+  | 'ASSESSMENT_FAILED'
+  | 'CONFLUENCE_SYNC_FAILED';
 
 type NotifyInput = {
   userId: string;
