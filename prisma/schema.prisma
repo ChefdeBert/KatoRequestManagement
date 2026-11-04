@@ -1,0 +1,225 @@
+// Kato — data model
+// Audit tables (ConversationMessage, BRDDocument, ApprovalLog) are append-only.
+// Immutability is enforced in PostgreSQL by triggers (see migrations/0002_audit_immutability).
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  REQUESTER
+  IT_REVIEWER
+  ADMIN
+}
+
+enum OpCo {
+  LIQUID_INTELLIGENT_TECHNOLOGIES
+  AFRICA_DATA_CENTRES
+  LIQUID_C2
+  SASAI_FINTECH
+  CASSAVA_AI
+  CASSAVA_GROUP
+  OTHER
+}
+
+enum Level {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum RequestStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_IT_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+enum ApprovalAction {
+  CREATED
+  SUBMITTED
+  REVIEW_STARTED
+  APPROVED
+  REJECTED
+  COMMENTED
+  JIRA_SYNC_QUEUED
+  JIRA_SYNCED
+  JIRA_SYNC_FAILED
+  JIRA_SYNC_RETRIED
+}
+
+enum JiraIssueType {
+  EPIC
+  STORY
+}
+
+enum JiraSyncStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  DEAD_LETTERED
+}
+
+/// Hydrated from SSO (Azure AD / Okta) on every sign-in. SSO is the source of truth for role.
+model User {
+  id          String    @id @default(cuid())
+  externalId  String?   @unique /// OIDC `oid` (Azure AD) or `sub` (Okta)
+  email       String    @unique
+  name        String
+  department  String?
+  opco        OpCo?
+  jobTitle    String?
+  role        Role      @default(REQUESTER)
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  requests      FeatureRequest[] @relation("Requester")
+  decisions     FeatureRequest[] @relation("Decider")
+  approvalLogs  ApprovalLog[]
+  brdDocuments  BRDDocument[]
+  notifications Notification[]
+}
+
+model FeatureRequest {
+  id     String        @id @default(cuid())
+  number Int           @unique @default(autoincrement()) /// Human reference: KATO-00042
+  status RequestStatus @default(DRAFT)
+
+  requesterId String
+  requester   User   @relation("Requester", fields: [requesterId], references: [id], onDelete: Restrict)
+
+  // Denormalised from the BRD for fast filtering in the admin queue
+  title      String?
+  opco       OpCo?
+  department String?
+  impact     Level?
+  urgency    Level?
+
+  /// Live, partial BRD captured during the conversation (see src/lib/brd.ts)
+  draftBrd     Json @default("{}")
+  completeness Int  @default(0)
+
+  jiraIssueKey    String? @unique
+  jiraIssueUrl    String?
+  rejectionReason String?
+
+  submittedAt     DateTime?
+  reviewStartedAt DateTime?
+  decidedAt       DateTime?
+  decidedById     String?
+  decidedBy       User?     @relation("Decider", fields: [decidedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages      ConversationMessage[]
+  brdDocuments  BRDDocument[]
+  approvalLogs  ApprovalLog[]
+  jiraSyncTasks JiraSyncTask[]
+  notifications Notification[]
+
+  @@index([status, submittedAt])
+  @@index([opco])
+  @@index([impact])
+  @@index([requesterId, updatedAt])
+}
+
+/// Immutable transcript. Content is stored *after* secret redaction.
+model ConversationMessage {
+  id         String      @id
+  requestId  String
+  request    FeatureRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  role       MessageRole
+  content    String      @db.Text
+  parts      Json? /// Full UI message parts (text + BRD tool calls)
+  redactions Int         @default(0)
+  model      String?
+  createdAt  DateTime    @default(now())
+
+  @@index([requestId, createdAt])
+}
+
+/// Immutable, versioned BRD snapshot. Version 1 is created on submission.
+model BRDDocument {
+  id            String         @id @default(cuid())
+  requestId     String
+  request       FeatureRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  version       Int
+  content       Json
+  markdown      String         @db.Text
+  contentHash   String /// sha256 of canonical JSON
+  generatedById String?
+  generatedBy   User?          @relation(fields: [generatedById], references: [id])
+  createdAt     DateTime       @default(now())
+
+  @@unique([requestId, version])
+}
+
+/// Immutable audit trail: state transitions, admin comments, Jira sync payloads.
+model ApprovalLog {
+  id         String         @id @default(cuid())
+  requestId  String
+  request    FeatureRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  actorId    String? /// null = system (worker)
+  actor      User?          @relation(fields: [actorId], references: [id])
+  action     ApprovalAction
+  fromStatus RequestStatus?
+  toStatus   RequestStatus?
+  comment    String?        @db.Text
+  metadata   Json?
+  createdAt  DateTime       @default(now())
+
+  @@index([requestId, createdAt])
+}
+
+/// Outbox row for the Jira sync queue. The BullMQ job only carries this row's id.
+model JiraSyncTask {
+  id           String         @id @default(cuid())
+  requestId    String
+  request      FeatureRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  issueType    JiraIssueType
+  status       JiraSyncStatus @default(PENDING)
+  attempts     Int            @default(0)
+  payload      Json /// Jira REST v3 create-issue body
+  response     Json?
+  lastError    String?        @db.Text
+  jiraIssueKey String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  completedAt  DateTime?
+
+  @@index([status, createdAt])
+  @@index([requestId])
+}
+
+model Notification {
+  id        String          @id @default(cuid())
+  userId    String
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestId String?
+  request   FeatureRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  type      String /// REQUEST_SUBMITTED | REQUEST_APPROVED | JIRA_CREATED | REQUEST_REJECTED | JIRA_SYNC_FAILED
+  title     String
+  body      String          @db.Text
+  link      String?
+  sentAt    DateTime?
+  readAt    DateTime?
+  createdAt DateTime        @default(now())
+
+  @@index([userId, readAt])
+}

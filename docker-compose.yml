@@ -1,0 +1,70 @@
+name: kato
+
+x-kato-env: &kato-env
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql://kato:${POSTGRES_PASSWORD:-kato}@postgres:5432/kato?schema=public
+    REDIS_URL: redis://redis:6379
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kato
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kato}
+      POSTGRES_DB: kato
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kato -d kato"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF persistence so queued Jira jobs survive restarts; BullMQ requires noeviction
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: { context: ., target: worker }
+    <<: *kato-env
+    command: ["npx", "prisma", "migrate", "deploy"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  app:
+    build: { context: ., target: app }
+    <<: *kato-env
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: { context: ., target: worker }
+    <<: *kato-env
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  redisdata:
