@@ -121,7 +121,11 @@ This runs `postgres`, `redis` (AOF, `noeviction`), a one-shot `migrate`, `app` o
 - **Epic Name:** older company-managed projects need it; set `JIRA_EPIC_NAME_FIELD`.
 - **Back-link:** each issue gets a remote link back to the Kato record and a description in Atlassian Document Format (ADF).
 
-## Deploying to Kubernetes / Azure Container Apps
+## Deploying to Azure
+
+The Bicep templates and scripts in [infra/](infra/README.md) build complete production and dev environments on Azure Container Apps.
+
+## Deploying to Kubernetes / Azure Container Apps (general notes)
 
 - Build two images from one Dockerfile: `--target app` and `--target worker`.
 - Run `npx prisma migrate deploy` from the worker image as a pre-deploy Job (Kubernetes) or init job (Azure Container Apps).
