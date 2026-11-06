@@ -45,7 +45,7 @@ param settings = {
   ASSESSMENT_MODEL: 'claude-opus-5-5'
 
   // Jira Cloud
-  JIRA_BASE_URL: 'https://cassava.atlassian.net'
+  JIRA_BASE_URL: 'https://liquidtelecom.atlassian.net'
   JIRA_EMAIL: 'svc-kato@cassava.tech'
   JIRA_PROJECT_KEY: 'AISF'
   JIRA_SYNC_MAX_ATTEMPTS: '8'
