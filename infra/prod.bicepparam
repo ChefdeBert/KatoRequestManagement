@@ -28,17 +28,17 @@ param useSmtpPassword = false
 
 param settings = {
   // Roles — Entra group object IDs (comma-separated)
-  KATO_ADMIN_GROUPS: 'TODO-admin-group-object-id'
-  KATO_REVIEWER_GROUPS: 'TODO-reviewer-group-object-id'
-  KATO_ADMIN_EMAILS: 'robert.northover@cassava.tech'
+  KATO_ADMIN_GROUPS: '0d75891d-6465-4ce7-919e-cff54d26391b'
+  KATO_REVIEWER_GROUPS: '900bd77a-eabb-4538-9d83-b5b8d78f36bb'
+  KATO_ADMIN_EMAILS: 'robert.northover@liquid.tech'
   KATO_ALLOW_SELF_APPROVAL: 'false'
   KATO_REQUIRE_ASSESSMENT: 'true'
   KATO_AUTONOMOUS_MIN_SCORE: '75'
   KATO_ASSISTED_MIN_SCORE: '50'
 
   // Entra ID app registration (tenant defaults to the subscription's tenant)
-  AZURE_AD_CLIENT_ID: 'TODO-app-registration-client-id'
-  AZURE_AD_TENANT_ID: ''
+  AZURE_AD_CLIENT_ID: '989d03ef-412f-4631-9ff1-cbb88d4f4bcc'
+  AZURE_AD_TENANT_ID: '68792612-0f0e-46cb-b16a-fcb82fd80cb1'
 
   // LLM
   LLM_PROVIDER: 'anthropic'
@@ -48,13 +48,13 @@ param settings = {
   // Jira Cloud
   JIRA_BASE_URL: 'https://liquidtelecom.atlassian.net'
   JIRA_EMAIL: 'svc-kato@cassava.tech'
-  JIRA_PROJECT_KEY: 'AISF'
+  JIRA_PROJECT_KEY: 'KATO'
   JIRA_SYNC_MAX_ATTEMPTS: '8'
   JIRA_CUSTOM_FIELDS: ''
 
   // Confluence Cloud (uses the Jira site and credentials)
   CONFLUENCE_ENABLED: 'true'
-  CONFLUENCE_SPACE_KEY: 'AISF'
+  CONFLUENCE_SPACE_KEY: 'KATO'
   CONFLUENCE_PARENT_PAGE_ID: ''
 
   // Email — leave SMTP_HOST empty to record in-app notifications only
