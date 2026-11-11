@@ -22,7 +22,7 @@ param appMaxReplicas = 2
 
 param tags = {
   owner: 'ai-software-factory'
-  'cost-centre': 'TODO'
+  'cost-centre': 'IT'
 }
 
 param useSmtpPassword = false
@@ -38,7 +38,7 @@ param settings = {
   KATO_ASSISTED_MIN_SCORE: '50'
 
   // Same app registration as prod is fine: add the dev redirect URI to it
-  AZURE_AD_CLIENT_ID: 'TODO-app-registration-client-id'
+  AZURE_AD_CLIENT_ID: '989d03ef-412f-4631-9ff1-cbb88d4f4bcc'
   AZURE_AD_TENANT_ID: '68792612-0f0e-46cb-b16a-fcb82fd80cb1'
 
   LLM_PROVIDER: 'anthropic'
