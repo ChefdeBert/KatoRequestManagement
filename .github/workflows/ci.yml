@@ -45,18 +45,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: |
-            package.json
-            package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            echo "::warning title=No package-lock.json::Dependencies are not pinned. Commit package-lock.json so CI and the Docker image use identical versions."
-            npm install --no-audit --no-fund
-          fi
+        run: npm ci
 
       - name: Validate Prisma schema
         run: npx prisma validate
@@ -92,9 +84,10 @@ jobs:
       - name: Build worker
         run: npm run build:worker
 
+      # Blocks on high and critical advisories, dev tooling included. To accept a specific risk temporarily,
+      # pin or override the package in package.json and note why in the pull request.
       - name: Dependency audit (high and critical)
-        continue-on-error: true
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --audit-level=high
 
   infra:
     name: Bicep and scripts

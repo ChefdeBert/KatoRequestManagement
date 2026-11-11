@@ -39,7 +39,7 @@ export async function notifyStaff(input: Omit<NotifyInput, 'userId'>, excludeUse
   await Promise.all(staff.map((s) => notifyUser({ ...input, userId: s.id })));
 }
 
-let transport: nodemailer.Transporter | null = null;
+let transport: ReturnType<typeof nodemailer.createTransport> | null = null;
 function mailer() {
   if (!process.env.SMTP_HOST) return null;
   transport ??= nodemailer.createTransport({

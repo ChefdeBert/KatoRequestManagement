@@ -114,7 +114,7 @@ Two workflows live in [.github/workflows](../.github/workflows):
 
 | Workflow | Runs on | What it does |
 |---|---|---|
-| [ci.yml](../.github/workflows/ci.yml) | Every pull request, and as stage 1 of Deploy | <ul><li>Installs dependencies and validates the Prisma schema.</li><li>Applies every migration to a clean PostgreSQL 16, and fails if `schema.prisma` has changes with no migration.</li><li>Checks the audit tables reject `TRUNCATE`.</li><li>Builds the web app and worker, and runs the TypeScript typecheck.</li><li>Compiles and lints the Bicep and ShellChecks the scripts.</li><li>Builds both Docker images.</li></ul> |
+| [ci.yml](../.github/workflows/ci.yml) | Every pull request, and as stage 1 of Deploy | <ul><li>Installs dependencies and validates the Prisma schema.</li><li>Applies every migration to a clean PostgreSQL 16, and fails if `schema.prisma` has changes with no migration.</li><li>Checks the audit tables reject `TRUNCATE`.</li><li>Builds the web app and worker, and runs the TypeScript typecheck.</li><li>Fails on high or critical npm advisories.</li><li>Compiles and lints the Bicep and ShellChecks the scripts.</li><li>Builds both Docker images.</li></ul> |
 | [deploy.yml](../.github/workflows/deploy.yml) | Every push to `main` (except docs-only changes), or **Run workflow** | <ul><li>CI.</li><li>**dev:** builds the images in the dev registry, migrates, rolls out and smoke-tests.</li><li>**production:** waits for approval, copies the *same* images from dev (no rebuild), migrates, rolls out and smoke-tests.</li></ul> |
 
 The smoke test checks three things: `/api/health` reports the app and database healthy, Entra ID sign-in is configured, and the email-only dev login is **not** enabled.
@@ -146,7 +146,7 @@ infra/scripts/setup-github-oidc.sh
 - **Releasing:** merge to `main`. Dev updates automatically, then production waits in the Actions tab for an approver.
 - **Redeploying:** to redeploy an older commit, run **Deploy** from the Actions tab on that commit. Images already in a registry aren't rebuilt.
 - **Pipeline permissions:** each identity has Contributor, Role Based Access Control Administrator and Key Vault Secrets Officer on its resource group. The production identity can also read the dev registry. RBAC Administrator is broad, so restrict it with an Azure role-assignment condition if your security team requires it.
-- **Commit `package-lock.json`.** Until you do, CI warns and installs the latest matching versions, which can differ from what you tested.
+- **Dependency audit:** CI fails on any high or critical npm advisory, so a newly published advisory can block a release until the package is updated.
 
 ## Known gaps
 
