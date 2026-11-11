@@ -28,9 +28,9 @@ param tags = {
 param useSmtpPassword = false
 
 param settings = {
-  KATO_ADMIN_GROUPS: 'TODO-admin-group-object-id'
-  KATO_REVIEWER_GROUPS: 'TODO-reviewer-group-object-id'
-  KATO_ADMIN_EMAILS: 'robert.northover@cassava.tech'
+  KATO_ADMIN_GROUPS: '7b401a19-8809-48c0-9f35-752ec9a03319'
+  KATO_REVIEWER_GROUPS: 'd850cc93-e2ea-4007-85c2-050c3d5a9abf'
+  KATO_ADMIN_EMAILS: 'robert.northover@liquid.tech'
   // Lets one tester raise and approve their own requests in dev
   KATO_ALLOW_SELF_APPROVAL: 'true'
   KATO_REQUIRE_ASSESSMENT: 'true'
@@ -39,7 +39,7 @@ param settings = {
 
   // Same app registration as prod is fine: add the dev redirect URI to it
   AZURE_AD_CLIENT_ID: 'TODO-app-registration-client-id'
-  AZURE_AD_TENANT_ID: ''
+  AZURE_AD_TENANT_ID: '68792612-0f0e-46cb-b16a-fcb82fd80cb1'
 
   LLM_PROVIDER: 'anthropic'
   ANTHROPIC_MODEL: 'claude-sonnet-5-5'
