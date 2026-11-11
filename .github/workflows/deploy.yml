@@ -1,0 +1,111 @@
+# Continuous delivery: every push to main runs CI, deploys to dev, then waits for approval to deploy
+# the same images to production. Azure access uses OpenID Connect (no stored credentials):
+# see infra/README.md, "CI/CD with GitHub Actions".
+name: Deploy
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - '.env.example'
+      - 'docker-compose.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One release at a time; a newer push waits rather than cancelling a rollout half-way.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  dev:
+    name: Deploy to dev
+    needs: ci
+    # Skipped (not failed) until the Azure connection is configured: infra/README.md, "CI/CD with GitHub Actions".
+    if: vars.AZURE_SUBSCRIPTION_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: dev
+      url: ${{ steps.release.outputs.url }}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare Azure CLI
+        run: |
+          az extension add -n containerapp --upgrade -y --only-show-errors
+          az bicep install
+
+      - name: Build images, migrate and roll out
+        id: release
+        env:
+          KATO_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          KATO_SECRETS_OFFICER_ID: ${{ vars.KATO_KV_ADMIN_GROUP_ID }}
+          KATO_SECRETS_OFFICER_TYPE: Group
+        run: |
+          infra/scripts/release.sh dev "${{ steps.tag.outputs.tag }}"
+          echo "url=$(infra/scripts/app-url.sh dev)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: infra/scripts/smoke-test.sh "${{ steps.release.outputs.url }}"
+
+  prod:
+    name: Deploy to production
+    needs: dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    # Add required reviewers to the "production" environment in GitHub so this job waits for approval.
+    environment:
+      name: production
+      url: ${{ steps.release.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prepare Azure CLI
+        run: |
+          az extension add -n containerapp --upgrade -y --only-show-errors
+          az bicep install
+
+      - name: Promote dev images, migrate and roll out
+        id: release
+        env:
+          KATO_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          KATO_SECRETS_OFFICER_ID: ${{ vars.KATO_KV_ADMIN_GROUP_ID }}
+          KATO_SECRETS_OFFICER_TYPE: Group
+          # Production runs exactly the images that were tested in dev, copied across, not rebuilt.
+          KATO_PROMOTE_FROM: dev
+        run: |
+          infra/scripts/release.sh prod "${{ needs.dev.outputs.tag }}"
+          echo "url=$(infra/scripts/app-url.sh prod)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: infra/scripts/smoke-test.sh "${{ steps.release.outputs.url }}"

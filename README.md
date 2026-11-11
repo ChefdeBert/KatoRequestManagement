@@ -123,7 +123,7 @@ This runs `postgres`, `redis` (AOF, `noeviction`), a one-shot `migrate`, `app` o
 
 ## Deploying to Azure
 
-The Bicep templates and scripts in [infra/](infra/README.md) build complete production and dev environments on Azure Container Apps.
+The Bicep templates and scripts in [infra/](infra/README.md) build complete production and dev environments on Azure Container Apps. GitHub Actions runs CI on every pull request and deploys every merge to `main`: dev first, then production after approval (see [CI/CD with GitHub Actions](infra/README.md#cicd-with-github-actions)).
 
 ## Deploying to Kubernetes / Azure Container Apps (general notes)
 

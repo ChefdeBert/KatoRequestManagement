@@ -4,6 +4,7 @@
 # Order: build images → run `prisma migrate deploy` with the new image → update app and worker.
 # On the very first release the migration job doesn't exist yet, so it runs straight after the apps are created.
 set -euo pipefail
+# shellcheck source=_common.sh
 source "$(dirname "$0")/_common.sh" "${1:-}"
 SCRIPTS="$(dirname "$0")"
 TAG="${2:-$(git -C "$REPO_DIR" rev-parse --short HEAD)}"

@@ -4,6 +4,7 @@
 #   KATO_DEPLOY_APPS=true KATO_IMAGE_TAG=abc123 infra/scripts/deploy.sh prod   # phase 2 (release.sh does this)
 # Add --what-if to preview changes without applying them.
 set -euo pipefail
+# shellcheck source=_common.sh
 source "$(dirname "$0")/_common.sh" "${1:-}"
 shift
 EXTRA_ARGS=("$@")
@@ -28,8 +29,14 @@ if [[ -z "${KATO_PG_ADMIN_PASSWORD:-}" ]]; then
 fi
 export KATO_PG_ADMIN_PASSWORD
 
-# Grant the person deploying "Key Vault Secrets Officer" so they can run set-secrets.sh.
-export KATO_SECRETS_OFFICER_ID="${KATO_SECRETS_OFFICER_ID:-$(az ad signed-in-user show --query id -o tsv)}"
+# Grant "Key Vault Secrets Officer" to whoever manages secrets (set-secrets.sh): KATO_SECRETS_OFFICER_ID
+# if given (the pipeline passes an admin group), else the signed-in person. A pipeline identity is not a
+# user, so the lookup returns nothing and no extra assignment is made; existing ones are never removed.
+if [[ -z "${KATO_SECRETS_OFFICER_ID:-}" ]]; then
+  KATO_SECRETS_OFFICER_ID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
+  KATO_SECRETS_OFFICER_TYPE=User
+fi
+export KATO_SECRETS_OFFICER_ID KATO_SECRETS_OFFICER_TYPE="${KATO_SECRETS_OFFICER_TYPE:-User}"
 
 if [[ "${KATO_DEPLOY_APPS:-false}" == "true" ]]; then
   if grep -n "'TODO" "$INFRA_DIR/$KATO_ENV.bicepparam"; then

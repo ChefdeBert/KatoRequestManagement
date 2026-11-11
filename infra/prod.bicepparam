@@ -10,6 +10,7 @@ param deployApps = bool(readEnvironmentVariable('KATO_DEPLOY_APPS', 'false'))
 param imageTag = readEnvironmentVariable('KATO_IMAGE_TAG', 'latest')
 param postgresAdminPassword = readEnvironmentVariable('KATO_PG_ADMIN_PASSWORD')
 param kvAdminPrincipalId = readEnvironmentVariable('KATO_SECRETS_OFFICER_ID', '')
+param kvAdminPrincipalType = readEnvironmentVariable('KATO_SECRETS_OFFICER_TYPE', 'User')
 
 // Set after the CNAME/TXT records exist and the domain is bound (infra/README.md, step 6)
 param customDomain = ''

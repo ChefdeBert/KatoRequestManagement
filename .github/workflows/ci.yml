@@ -1,0 +1,143 @@
+# Continuous integration: runs on every pull request, and as the first stage of the Deploy workflow.
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: '20'
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  app:
+    name: Build, typecheck and migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kato
+          POSTGRES_PASSWORD: kato
+          POSTGRES_DB: kato
+        ports: [ '5432:5432' ]
+        options: >-
+          --health-cmd "pg_isready -U kato"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://kato:kato@localhost:5432/kato?schema=public
+      REDIS_URL: redis://localhost:6379
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ci-only-not-a-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package.json
+            package-lock.json
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "::warning title=No package-lock.json::Dependencies are not pinned. Commit package-lock.json so CI and the Docker image use identical versions."
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Validate Prisma schema
+        run: npx prisma validate
+
+      - name: Apply migrations to a clean database
+        run: npx prisma migrate deploy
+
+      - name: Check migrations match schema.prisma
+        run: |
+          npx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code \
+            || { echo "::error::schema.prisma has changes with no migration. Run: npx prisma migrate dev --name <change>"; exit 1; }
+
+      - name: Check audit tables are append-only
+        env:
+          PGPASSWORD: kato
+        run: |
+          for t in ConversationMessage BRDDocument ApprovalLog; do
+            if psql -h localhost -U kato -d kato -v ON_ERROR_STOP=1 -c "TRUNCATE \"$t\"" 2>/dev/null; then
+              echo "::error::TRUNCATE on $t succeeded: the immutability trigger is missing"; exit 1
+            fi
+            echo "✓ $t rejects TRUNCATE"
+          done
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build worker
+        run: npm run build:worker
+
+      - name: Dependency audit (high and critical)
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+
+  infra:
+    name: Bicep and scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile Bicep templates and parameter files
+        env:
+          KATO_PG_ADMIN_PASSWORD: ci-placeholder
+        run: |
+          az bicep install
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          for e in prod dev; do
+            az bicep build-params --file "infra/$e.bicepparam" --stdout > /dev/null
+            echo "✓ $e.bicepparam"
+          done
+
+      - name: Lint Bicep
+        run: az bicep lint --file infra/main.bicep
+
+      - name: ShellCheck deployment scripts
+        # _common.sh is checked through the scripts that source it.
+        run: shellcheck -x -P infra/scripts --severity=warning $(ls infra/scripts/*.sh | grep -v _common.sh)
+
+  images:
+    name: Docker image (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ app, worker ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.target }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: false
+          tags: kato-${{ matrix.target }}:ci
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}

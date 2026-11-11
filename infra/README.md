@@ -100,13 +100,53 @@ az containerapp hostname bind -n kato-app -g ct-hq-kato-ai --hostname kato.cassa
 
 | Task | Command |
 |---|---|
-| Release the current commit | `infra/scripts/release.sh prod` |
+| Release the current commit | Merge to `main` (pipeline), or `infra/scripts/release.sh prod` by hand |
 | Change settings or sizing | Edit the `.bicepparam` file, then `KATO_DEPLOY_APPS=true KATO_IMAGE_TAG=<current tag> infra/scripts/deploy.sh prod` |
 | Rotate an API key | `infra/scripts/set-secrets.sh prod`, then restart the app and worker revisions |
 | App logs | `az containerapp logs show -n kato-app -g ct-hq-kato-ai --follow` |
 | Worker logs | `az containerapp logs show -n kato-worker -g ct-hq-kato-ai --follow` |
 
 **Release order.** `release.sh` always migrates before rolling out new code. Keep migrations backwards-compatible with the previous release, because old replicas keep serving until the new revision is ready.
+
+## CI/CD with GitHub Actions
+
+Two workflows live in [.github/workflows](../.github/workflows):
+
+| Workflow | Runs on | What it does |
+|---|---|---|
+| [ci.yml](../.github/workflows/ci.yml) | Every pull request, and as stage 1 of Deploy | <ul><li>Installs dependencies and validates the Prisma schema.</li><li>Applies every migration to a clean PostgreSQL 16, and fails if `schema.prisma` has changes with no migration.</li><li>Checks the audit tables reject `TRUNCATE`.</li><li>Builds the web app and worker, and runs the TypeScript typecheck.</li><li>Compiles and lints the Bicep and ShellChecks the scripts.</li><li>Builds both Docker images.</li></ul> |
+| [deploy.yml](../.github/workflows/deploy.yml) | Every push to `main` (except docs-only changes), or **Run workflow** | <ul><li>CI.</li><li>**dev:** builds the images in the dev registry, migrates, rolls out and smoke-tests.</li><li>**production:** waits for approval, copies the *same* images from dev (no rebuild), migrates, rolls out and smoke-tests.</li></ul> |
+
+The smoke test checks three things: `/api/health` reports the app and database healthy, Entra ID sign-in is configured, and the email-only dev login is **not** enabled.
+
+The pipeline signs in to Azure with OpenID Connect, so no Azure password or key is stored in GitHub. Each environment has its own Entra app registration, which trusts only the matching GitHub environment and has rights only on its own resource group.
+
+### One-time setup
+
+**1. Bootstrap each environment by hand once.** Follow [First deployment](#first-deployment) steps 1–5 for dev and for production. The pipeline can't do this part: `set-secrets.sh` asks for API keys at hidden prompts, and the `TODO` values must be filled in. Until they are, the deploy jobs stop with a message saying what's missing.
+
+**2. Create the pipeline identities.** This needs permission to create app registrations and Owner on both resource groups. It creates the dev resource group if needed, and prints the values for step 3.
+
+```bash
+infra/scripts/setup-github-oidc.sh
+```
+
+**3. Configure GitHub.** In GitHub, go to **Settings** on the repository.
+- **Environments:**
+  - Create `dev` and `production`.
+  - In each, set the environment variable `AZURE_CLIENT_ID`, and limit deployment branches to `main`.
+  - On `production`, add **Required reviewers**.
+- **Secrets and variables → Actions → Variables:**
+  - Set `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`.
+  - Optionally set `KATO_KV_ADMIN_GROUP_ID`, an Entra group that gets Key Vault Secrets Officer on every deploy.
+- **Branches:** protect `main`. Require a pull request and the CI checks to pass.
+
+### Notes
+
+- **Releasing:** merge to `main`. Dev updates automatically, then production waits in the Actions tab for an approver.
+- **Redeploying:** to redeploy an older commit, run **Deploy** from the Actions tab on that commit. Images already in a registry aren't rebuilt.
+- **Pipeline permissions:** each identity has Contributor, Role Based Access Control Administrator and Key Vault Secrets Officer on its resource group. The production identity can also read the dev registry. RBAC Administrator is broad, so restrict it with an Azure role-assignment condition if your security team requires it.
+- **Commit `package-lock.json`.** Until you do, CI warns and installs the latest matching versions, which can differ from what you tested.
 
 ## Known gaps
 

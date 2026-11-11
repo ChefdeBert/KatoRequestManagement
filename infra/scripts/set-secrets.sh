@@ -3,6 +3,7 @@
 # passed on the command line. Press Enter at a prompt to keep the existing value.
 #   infra/scripts/set-secrets.sh prod
 set -euo pipefail
+# shellcheck source=_common.sh
 source "$(dirname "$0")/_common.sh" "${1:-}"
 
 KV="$(kv_name)"
