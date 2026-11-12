@@ -1,7 +1,9 @@
 // Container Apps environment plus the Kato workloads:
-//   kato-app      Next.js web app (external HTTPS ingress, scales on HTTP)
+//   kato-app      Next.js web app (HTTPS ingress, scales on HTTP). With internalOnly the whole environment
+//                 has only a private IP in the Kato VNet: reachable from the corporate network, not the internet.
 //   kato-worker   BullMQ worker (no ingress, exactly one replica)
 //   kato-migrate  manual job that runs `prisma migrate deploy` before each release
+//   kato-smoke    manual job that checks the deployed app from inside the network (used by release pipelines)
 // Secrets are Key Vault references resolved by the user-assigned identity.
 
 param location string
@@ -20,10 +22,13 @@ param deployApps bool
 
 param imageTag string
 
-@description('Custom host name (e.g. kato.cassava.tech). Empty = use the Container Apps default host name.')
+@description('Environment has a private IP only (no public endpoint). Users reach it over the corporate network.')
+param internalOnly bool
+
+@description('Custom host name (e.g. kato.azure.liquidtelecom.net). Empty = use the Container Apps default host name.')
 param customDomain string
 
-@description('Name of the managed certificate created by `az containerapp hostname bind` for customDomain.')
+@description('Certificate for customDomain: a certificate uploaded to the environment (internal) or a managed certificate (public).')
 param customDomainCertificateName string
 
 @description('Plain (non-secret) environment variables shared by app, worker and job.')
@@ -53,7 +58,7 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
     }
     vnetConfiguration: {
       infrastructureSubnetId: acaSubnetId
-      internal: false
+      internal: internalOnly
     }
     workloadProfiles: [ { name: 'Consumption', workloadProfileType: 'Consumption' } ]
     zoneRedundant: isProd
@@ -124,7 +129,8 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
           {
             name: customDomain
             bindingType: 'SniEnabled'
-            certificateId: '${env.id}/managedCertificates/${customDomainCertificateName}'
+            // Managed certificates need public DNS validation, so internal environments use an uploaded certificate.
+            certificateId: internalOnly ? '${env.id}/certificates/${customDomainCertificateName}' : '${env.id}/managedCertificates/${customDomainCertificateName}'
           }
         ]
       }
@@ -223,7 +229,57 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = if (deployApps) {
           // Call the Prisma CLI directly: npx would try to write a cache in the non-root user's missing home dir.
           command: [ 'node', 'node_modules/prisma/build/index.js', 'migrate', 'deploy' ]
           resources: { cpu: json('0.5'), memory: '1Gi' }
-          env: [ { name: 'DATABASE_URL', secretRef: 'database-url' } ]
+          // CHECKPOINT_DISABLE: stop the Prisma CLI calling checkpoint.prisma.io (blocked by the hub firewall).
+          env: [ { name: 'DATABASE_URL', secretRef: 'database-url' }, { name: 'CHECKPOINT_DISABLE', value: '1' } ]
+        }
+      ]
+    }
+  }
+}
+
+// Checks the app the way an employee's browser would reach it (its HTTPS URL, via the central DNS),
+// but from inside the network, so release pipelines running on the internet can still verify a deployment.
+var smokeScript = '''
+const base = process.env.KATO_APP_URL;
+const fail = (m) => { console.error("FAIL " + m); process.exit(1); };
+(async () => {
+  let body = "";
+  for (let i = 0; i < 30; i++) {
+    try { const r = await fetch(base + "/api/health"); body = await r.text(); if (r.ok && body.includes('"ok"')) break; } catch (e) { body = String(e); }
+    await new Promise((r) => setTimeout(r, 10000));
+  }
+  if (!body.includes('"ok"')) fail("health check: " + body);
+  console.log("ok   health " + body);
+  const p = await (await fetch(base + "/api/auth/providers")).text();
+  if (!p.includes('"azure-ad"')) fail("Entra ID sign-in is not configured: " + p);
+  if (p.includes('"kato-dev"')) fail("the email-only dev login is enabled");
+  console.log("ok   sign-in: Entra ID on, dev login off");
+})().catch((e) => fail(String(e)));
+'''
+
+resource smoke 'Microsoft.App/jobs@2024-03-01' = if (deployApps) {
+  name: 'kato-smoke'
+  location: location
+  tags: tags
+  identity: identityBlock
+  properties: {
+    environmentId: env.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Manual'
+      manualTriggerConfig: { parallelism: 1, replicaCompletionCount: 1 }
+      replicaTimeout: 600
+      replicaRetryLimit: 0
+      registries: registries
+    }
+    template: {
+      containers: [
+        {
+          name: 'smoke'
+          image: '${acrLoginServer}/kato-worker:${imageTag}'
+          command: [ 'node', '-e', smokeScript ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+          env: [ { name: 'KATO_APP_URL', value: publicUrl } ]
         }
       ]
     }

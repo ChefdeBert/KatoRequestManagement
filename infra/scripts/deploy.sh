@@ -16,6 +16,11 @@ if [[ "$(az group exists -n "$RG")" != "true" ]]; then
   az group create -n "$RG" -l "$LOCATION" --tags application=kato environment=dev managed-by=bicep -o none
 fi
 
+# Network and DNS values are needed from the very first deployment.
+if grep -nE "^param (privateDnsZone|vnet|acaSubnet|postgresSubnet|privateEndpointSubnet|dnsServers).*'TODO" "$INFRA_DIR/$KATO_ENV.bicepparam"; then
+  die "Fill in the network/DNS TODO values in infra/$KATO_ENV.bicepparam first."
+fi
+
 # Postgres admin password: reuse the one in Key Vault, else generate one and store it after deploy.
 KV="$(kv_name || true)"
 if [[ -z "${KATO_PG_ADMIN_PASSWORD:-}" && -n "$KV" ]]; then

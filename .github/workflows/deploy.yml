@@ -66,8 +66,10 @@ jobs:
           infra/scripts/release.sh dev "${{ steps.tag.outputs.tag }}"
           echo "url=$(infra/scripts/app-url.sh dev)" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke test
-        run: infra/scripts/smoke-test.sh "${{ steps.release.outputs.url }}"
+      - name: Smoke test (runs inside the Kato network)
+        env:
+          KATO_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: infra/scripts/smoke-test.sh dev
 
   prod:
     name: Deploy to production
@@ -107,5 +109,7 @@ jobs:
           infra/scripts/release.sh prod "${{ needs.dev.outputs.tag }}"
           echo "url=$(infra/scripts/app-url.sh prod)" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke test
-        run: infra/scripts/smoke-test.sh "${{ steps.release.outputs.url }}"
+      - name: Smoke test (runs inside the Kato network)
+        env:
+          KATO_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: infra/scripts/smoke-test.sh prod

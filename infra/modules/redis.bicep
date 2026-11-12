@@ -7,8 +7,10 @@ param location string
 param namePrefix string
 param tags object
 param isProd bool
-param vnetId string
 param privateEndpointSubnetId string
+
+@description('Resource ID of the privatelink.redis.azure.net private DNS zone.')
+param privateDnsZoneId string
 param keyVaultName string
 
 var suffix = uniqueString(resourceGroup().id)
@@ -39,22 +41,6 @@ resource database 'Microsoft.Cache/redisEnterprise/databases@2025-04-01' = {
   }
 }
 
-resource dnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: 'privatelink.redis.azure.net'
-  location: 'global'
-  tags: tags
-}
-
-resource dnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
-  parent: dnsZone
-  name: 'link-${namePrefix}'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: { id: vnetId }
-  }
-}
-
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${redis.name}'
   location: location
@@ -78,7 +64,7 @@ resource peDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-
   parent: pe
   name: 'default'
   properties: {
-    privateDnsZoneConfigs: [ { name: 'redis', properties: { privateDnsZoneId: dnsZone.id } } ]
+    privateDnsZoneConfigs: [ { name: 'redis', properties: { privateDnsZoneId: privateDnsZoneId } } ]
   }
 }
 

@@ -1,20 +1,28 @@
 // Virtual network for Kato: Container Apps, PostgreSQL (VNet-injected) and private endpoints.
+// Address ranges are allocated by the Liquid/Cassava Networks team and passed in exactly as allocated.
 // Optional NAT gateway gives all outbound traffic one static IP (for Atlassian / Anthropic allowlists).
 
 param location string
 param namePrefix string
 param tags object
 
-@description('VNet address space, e.g. 10.60.0.0/16. Must not overlap other Cassava networks you may peer with.')
+@description('VNet address space allocated by the Networks team, e.g. 10.181.106.0/24.')
 param addressPrefix string
+
+@description('Container Apps subnet (delegated). Minimum /27; /26 or larger recommended.')
+param acaSubnetPrefix string
+
+@description('PostgreSQL Flexible Server subnet (delegated). Minimum /28.')
+param postgresSubnetPrefix string
+
+@description('Private endpoint subnet. One address per private endpoint. Minimum /28.')
+param privateEndpointSubnetPrefix string
+
+@description('Custom DNS servers for the VNet (central resolvers). Empty = Azure-provided DNS.')
+param dnsServers array
 
 @description('Attach a NAT gateway with a static public IP to the Container Apps subnet.')
 param enableNatGateway bool
-
-// Subnet plan inside the /16: /23 for Container Apps, /28 for Postgres, /27 for private endpoints.
-var acaSubnetPrefix = cidrSubnet(addressPrefix, 23, 0) // x.x.0.0/23
-var pgSubnetPrefix = cidrSubnet(addressPrefix, 28, 32) // x.x.2.0/28
-var peSubnetPrefix = cidrSubnet(addressPrefix, 27, 17) // x.x.2.32/27
 
 resource natIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (enableNatGateway) {
   name: 'pip-${namePrefix}-nat'
@@ -45,6 +53,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   tags: tags
   properties: {
     addressSpace: { addressPrefixes: [ addressPrefix ] }
+    dhcpOptions: empty(dnsServers) ? null : { dnsServers: dnsServers }
     subnets: [
       {
         name: 'snet-aca'
@@ -57,14 +66,14 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
       {
         name: 'snet-postgres'
         properties: {
-          addressPrefix: pgSubnetPrefix
+          addressPrefix: postgresSubnetPrefix
           delegations: [ { name: 'pg', properties: { serviceName: 'Microsoft.DBforPostgreSQL/flexibleServers' } } ]
         }
       }
       {
         name: 'snet-pe'
         properties: {
-          addressPrefix: peSubnetPrefix
+          addressPrefix: privateEndpointSubnetPrefix
           privateEndpointNetworkPolicies: 'Disabled'
         }
       }
@@ -73,6 +82,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
 }
 
 output vnetId string = vnet.id
+output vnetName string = vnet.name
 output acaSubnetId string = vnet.properties.subnets[0].id
 output postgresSubnetId string = vnet.properties.subnets[1].id
 output privateEndpointSubnetId string = vnet.properties.subnets[2].id

@@ -11,10 +11,12 @@ The Bicep files here create a complete Kato environment in one resource group. B
 
 | Resource | Production | Dev |
 |---|---|---|
-| Virtual network | `10.60.0.0/16`: Container Apps subnet `/23`, Postgres subnet `/28`, private endpoint subnet `/27` | `10.61.0.0/16` |
-| NAT gateway and static public IP | Yes: one outbound IP for Atlassian and Anthropic allowlists | No |
-| Container Apps environment | Workload profiles, VNet-integrated, zone-redundant | Not zone-redundant |
-| `kato-app` | 1 vCPU / 2 GiB, 2–6 replicas, scales at 50 concurrent requests | 0.5 vCPU / 1 GiB, 1–2 replicas |
+| Virtual network | `10.181.108.0/24`: Container Apps `.0/25`, Postgres `.128/28`, private endpoints `.144/28` | `10.181.107.0/25`: Container Apps `.0/26`, Postgres `.64/28`, private endpoints `.80/28` |
+| DNS | Central resolvers `10.181.251.196` and `.132`, and the central private DNS zones in `liq-hq-dnszones` | same |
+| Outbound internet | Through the Virtual WAN hub firewall `southafricanorth-fw01`, so no NAT gateway is created. Optional with `enableNatGateway`. | same |
+| Container Apps environment | **Internal only**: a private IP in the Kato VNet and no public endpoint. Workload profiles, zone-redundant. | Internal only, not zone-redundant |
+| App DNS | A private zone for the environment's domain, with a wildcard record pointing at its private IP. It's created in `liq-hq-dnszones` and linked to the Kato VNet and both resolver VNets. | same |
+| `kato-app` | HTTPS for employees on the corporate network. 1 vCPU / 2 GiB, 2–6 replicas, scales at 50 concurrent requests | 0.5 vCPU / 1 GiB, 1–2 replicas |
 | `kato-worker` | 0.5 vCPU / 1 GiB, exactly 1 replica | same |
 | `kato-migrate` job | Runs `prisma migrate deploy`, started by `release.sh` | same |
 | PostgreSQL Flexible Server 16 | D2ds_v5, 128 GB auto-grow, zone-redundant HA, 35-day geo-redundant backups, private access only | B2s, 32 GB, no HA, 7-day backups |
@@ -35,6 +37,28 @@ Bicep writes `database-url`, `redis-url` and `postgres-admin-password` into Key 
   az bicep install
   ```
 - **Owner** on the resource group (or Contributor plus Role Based Access Control Administrator), because the templates create role assignments. You also need to be able to create resource groups in the subscription for dev.
+- **Network prerequisites, from the Networks team:**
+  - **Virtual WAN connection.** Each Kato VNet needs a connection to `ct-vWAN-hub-southafricanorth`, made **before the first deployment**. That connection is what lets Kato reach the DNS resolvers `10.181.251.196` (`ct-private-dns-za`) and `10.181.251.132` (`ct-private-dns-uk`). Without it, nothing in the VNet can resolve names, and the Container Apps environment fails to create.
+  - **DNS resolvers.** They must forward `privatelink.*` and Azure public names to Azure DNS (`168.63.129.16`) from a network linked to the central zones.
+  - **Firewall rules on `southafricanorth-fw01`.** All outbound traffic from both Kato networks leaves through the hub firewall, so it must allow HTTPS (TCP 443) to:
+
+    | Needed by | Destination |
+    |---|---|
+    | Container Apps platform: pulling system images | `mcr.microsoft.com`, `*.data.mcr.microsoft.com` |
+    | Container Apps: pulling Kato's images | `<registry>.azurecr.io`, `<registry>.southafricanorth.data.azurecr.io`. The registry name is the `acrName` deployment output. Or allow the `AzureContainerRegistry` service tag. |
+    | Managed identity and Entra ID sign-in | `login.microsoftonline.com`, `*.identity.azure.net`, `graph.microsoft.com` |
+    | Key Vault secrets | `*.vault.azure.net` (or the `AzureKeyVault` service tag) |
+    | Logs to Log Analytics | `*.ods.opinsights.azure.com`, `*.oms.opinsights.azure.com` (or the `AzureMonitor` service tag) |
+    | Kato: AI assistant and assessments | `api.anthropic.com` |
+    | Kato: Jira and Confluence | `liquidtelecom.atlassian.net` |
+    | Kato: email, only if SMTP is enabled | Your SMTP host, on TCP 587 |
+
+    Postgres and Redis traffic stays inside the VNet, so it needs no firewall rule.
+  - **Employee access (inbound).** Kato is internal only. Employees reach `https://kato-app.<defaultDomain>` at the environment's private IP, which is in the Container Apps subnet (`10.181.108.0/25` prod, `10.181.107.0/26` dev). The Networks team needs to:
+    - allow corporate user networks (office, VPN, ExpressRoute) to reach those subnets on **TCP 443** through Virtual WAN and fw01;
+    - make sure corporate DNS sends lookups for `*.southafricanorth.azurecontainerapps.io` to the resolver inbound endpoints `10.181.251.196` / `.132`, so the app's private DNS zone answers. Without that, employees resolve the name to nothing.
+  - **Permissions.** You, and later each pipeline identity, need **Private DNS Zone Contributor** on `liq-hq-dnszones`. The templates link Kato's VNet to `privatelink.postgres.database.azure.com` and `privatelink.redis.azure.net` there, and register Kato's Postgres and Redis records in them. If the Networks team creates the VNet links themselves, set `linkVnetToCentralDnsZones = false`.
+  - **Central DNS zones.** These live in `liq-hq-dnszones` (subscription `d77c432c-1ece-4615-a240-5af85f7fb97c`), and both parameter files are already set to use them.
 - **Resource providers.** A new subscription needs these registered once:
   ```bash
   for p in Microsoft.App Microsoft.ContainerRegistry Microsoft.DBforPostgreSQL Microsoft.Cache Microsoft.KeyVault Microsoft.OperationalInsights Microsoft.Network Microsoft.ManagedIdentity; do az provider register -n $p --subscription 2398a4bc-4430-4c40-8d53-1339ee04ca2c; done
@@ -76,25 +100,15 @@ infra/scripts/set-secrets.sh prod
 infra/scripts/release.sh prod
 ```
 
-**6. Custom domain (production).**
-- Create these DNS records:
-  - `CNAME kato` → `kato-app.<defaultDomain>`
-  - `TXT asuid.kato` → the value from `az containerapp show -n kato-app -g ct-hq-kato-ai --query properties.customDomainVerificationId -o tsv`
-- Then bind the domain:
+**6. Open Kato.** From a machine on the corporate network, open the URL `release.sh` printed (`https://kato-app.<defaultDomain>`). It has a valid Microsoft-issued certificate, so no certificate setup is needed. The private DNS zone for that domain is created automatically, and the `appDnsZone` and `appPrivateIp` outputs show its name and the IP it points to.
 
-```bash
-az containerapp hostname add -n kato-app -g ct-hq-kato-ai --hostname kato.cassava.tech
-```
+**Optional: a friendly internal name** such as `kato.azure.liquidtelecom.net`. Container Apps can't issue certificates for private names, so you need a certificate for that name, from Cassava's internal CA or a public CA:
+- Upload the certificate to the environment, with `az containerapp env certificate upload` or from Key Vault.
+- Add a `kato` A record in the private zone `azure.liquidtelecom.net` (`liq-hq-dnszones`) pointing to `appPrivateIp`.
+- Set `customDomain` and `customDomainCertificateName` in the parameter file, then release again. This switches `NEXTAUTH_URL` and `KATO_PUBLIC_URL` to the new name.
+- Add `https://<name>/api/auth/callback/azure-ad` to the app registration.
 
-```bash
-az containerapp hostname bind -n kato-app -g ct-hq-kato-ai --hostname kato.cassava.tech --environment cae-kato-prod --validation-method CNAME
-```
-
-- Find the certificate name with `az containerapp env certificate list -n cae-kato-prod -g ct-hq-kato-ai --managed-certificates-only -o table`.
-- Set `customDomain` and `customDomainCertificateName` in `prod.bicepparam`, and run `release.sh prod` again. This updates `NEXTAUTH_URL` and `KATO_PUBLIC_URL`, and keeps the binding on later deploys.
-- Add `https://kato.cassava.tech/api/auth/callback/azure-ad` to the app registration.
-
-**7. Allowlist the outbound IP.** If Cassava's Atlassian site restricts IP addresses, allowlist the `outboundIp` output.
+**7. Allowlist the outbound IP.** If the Atlassian site restricts IP addresses, allowlist the public IP of `southafricanorth-fw01`, which all of Kato's outbound traffic leaves through.
 
 ## Day-to-day
 
@@ -117,7 +131,7 @@ Two workflows live in [.github/workflows](../.github/workflows):
 | [ci.yml](../.github/workflows/ci.yml) | Every pull request, and as stage 1 of Deploy | <ul><li>Installs dependencies and validates the Prisma schema.</li><li>Applies every migration to a clean PostgreSQL 16, and fails if `schema.prisma` has changes with no migration.</li><li>Checks the audit tables reject `TRUNCATE`.</li><li>Builds the web app and worker, and runs the TypeScript typecheck.</li><li>Fails on high or critical npm advisories.</li><li>Compiles and lints the Bicep and ShellChecks the scripts.</li><li>Builds both Docker images.</li></ul> |
 | [deploy.yml](../.github/workflows/deploy.yml) | Every push to `main` (except docs-only changes), or **Run workflow** | <ul><li>CI.</li><li>**dev:** builds the images in the dev registry, migrates, rolls out and smoke-tests.</li><li>**production:** waits for approval, copies the *same* images from dev (no rebuild), migrates, rolls out and smoke-tests.</li></ul> |
 
-The smoke test checks three things: `/api/health` reports the app and database healthy, Entra ID sign-in is configured, and the email-only dev login is **not** enabled.
+The smoke test checks three things: `/api/health` reports the app and database healthy, Entra ID sign-in is configured, and the email-only dev login is **not** enabled. GitHub's runners can't reach an internal app, so `smoke-test.sh` starts the `kato-smoke` Container Apps job. That job runs inside Kato's network and calls the app at the same HTTPS address employees use, so it also checks the DNS set-up.
 
 The pipeline signs in to Azure with OpenID Connect, so no Azure password or key is stored in GitHub. Each environment has its own Entra app registration, which trusts only the matching GitHub environment and has rights only on its own resource group.
 
@@ -150,7 +164,7 @@ infra/scripts/setup-github-oidc.sh
 
 ## Known gaps
 
-- **No Front Door or WAF.** The app is exposed directly through Container Apps ingress with a managed certificate. Add Front Door Premium with WAF if Cassava's security policy requires it.
+- **Internal access depends on the network.** Kato has no public endpoint, so employees reach it only if the Networks team routes corporate networks to the Kato subnets and forwards the Container Apps DNS domain (see Network prerequisites).
 - **Data plane open to the internet.** Key Vault and ACR have public endpoints, protected by RBAC. This keeps the scripts working from a laptop. Postgres and Redis are private only.
 - **The app uses the Postgres admin login.** For least privilege, create a `kato_app` role limited to DML on schema `public`, and point `database-url` at it. Keep the admin login for the migration job only.
 - **No alerts yet.** Dead-lettered jobs already notify staff in-app. Still worth adding: restart-count and replica-count alerts on both apps, and Postgres CPU and storage alerts.

@@ -46,4 +46,4 @@ if [[ "$FIRST_RELEASE" == "true" ]]; then
     --revision "$(az containerapp show -n kato-worker -g "$RG" --query properties.latestRevisionName -o tsv)" -o none
 fi
 
-log "Released $TAG → $(az containerapp show -n kato-app -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)"
+log "Released $TAG → https://$(az containerapp show -n kato-app -g "$RG" --query properties.configuration.ingress.fqdn -o tsv) (corporate network only)"

@@ -5,8 +5,10 @@ param location string
 param namePrefix string
 param tags object
 param isProd bool
-param vnetId string
 param subnetId string
+
+@description('Resource ID of the private DNS zone (name ending .postgres.database.azure.com) linked to the VNet.')
+param privateDnsZoneId string
 param keyVaultName string
 
 param adminLogin string = 'katoadmin'
@@ -20,22 +22,6 @@ param connectionLimit int = 10
 var suffix = uniqueString(resourceGroup().id)
 var serverName = 'psql-${namePrefix}-${suffix}'
 var databaseName = 'kato'
-
-resource dnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: '${namePrefix}.private.postgres.database.azure.com'
-  location: 'global'
-  tags: tags
-}
-
-resource dnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
-  parent: dnsZone
-  name: 'link-${namePrefix}'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: { id: vnetId }
-  }
-}
 
 resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: serverName
@@ -64,11 +50,10 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
     highAvailability: { mode: isProd ? 'ZoneRedundant' : 'Disabled' }
     network: {
       delegatedSubnetResourceId: subnetId
-      privateDnsZoneArmResourceId: dnsZone.id
+      privateDnsZoneArmResourceId: privateDnsZoneId
       publicNetworkAccess: 'Disabled'
     }
   }
-  dependsOn: [ dnsLink ]
 }
 
 resource db 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {

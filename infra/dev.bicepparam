@@ -5,7 +5,29 @@ using './main.bicep'
 
 param environmentName = 'dev'
 param location = 'southafricanorth'
-param vnetAddressPrefix = '10.61.0.0/16'
+param vnetAddressPrefix = '10.181.107.0/25'     // allocated by Networks team
+param acaSubnetPrefix = '10.181.107.0/26'       // 64 addresses: Container Apps
+param postgresSubnetPrefix = '10.181.107.64/28'
+param privateEndpointSubnetPrefix = '10.181.107.80/28'
+// 10.181.107.96/27 left free for growth
+
+// ── DNS (Networks team standard) ────────────────────────────────────
+// VNet uses the central resolvers. Private DNS zones live centrally in liq-hq-dnszones.
+// Resolvers: 10.181.251.196 = ct-private-dns-za, 10.181.251.132 = ct-private-dns-uk (Azure DNS Private Resolver).
+// The Kato VNet must be connected to the vWAN hub ct-vWAN-hub-southafricanorth BEFORE the first deployment,
+// or nothing in it can reach these resolvers.
+param dnsServers = [ '10.181.251.196', '10.181.251.132' ]
+param privateDnsZoneResourceGroup = 'liq-hq-dnszones'
+param privateDnsZoneSubscriptionId = 'd77c432c-1ece-4615-a240-5af85f7fb97c' // subscription holding liq-hq-dnszones
+param linkVnetToCentralDnsZones = true
+param postgresPrivateDnsZoneName = 'privatelink.postgres.database.azure.com' // exists in liq-hq-dnszones
+param redisPrivateDnsZoneName = 'privatelink.redis.azure.net' // exists in liq-hq-dnszones
+param internalOnly = true // employees only, over the corporate network
+param dnsResolverVnetIds = [
+  '/subscriptions/d77c432c-1ece-4615-a240-5af85f7fb97c/resourceGroups/rg-spoke-dns/providers/Microsoft.Network/virtualNetworks/vnet-spoke-dns'
+  '/subscriptions/d77c432c-1ece-4615-a240-5af85f7fb97c/resourceGroups/rg-spoke-dns/providers/Microsoft.Network/virtualNetworks/vnet-spoke-dns-uk'
+]
+// Outbound internet traffic goes through the vWAN hub firewall (southafricanorth-fw01), not a NAT gateway.
 param enableNatGateway = false
 
 param deployApps = bool(readEnvironmentVariable('KATO_DEPLOY_APPS', 'false'))

@@ -65,6 +65,7 @@ setup() { # setup <env> <github-environment> <resource-group>
 
 setup dev dev ct-hq-kato-ai-dev
 CLIENT_ID_DEV="$LAST_APP_ID"
+SP_ID_DEV="$LAST_SP_ID"
 setup prod production ct-hq-kato-ai
 CLIENT_ID_PROD="$LAST_APP_ID"
 SP_ID_PROD="$LAST_SP_ID"
@@ -73,6 +74,17 @@ SP_ID_PROD="$LAST_SP_ID"
 log "Allow production to import images from the dev registry"
 assign "$SP_ID_PROD" "Reader" "$(rg_id ct-hq-kato-ai-dev)"
 assign "$SP_ID_PROD" "AcrPull" "$(rg_id ct-hq-kato-ai-dev)"
+
+# Both identities create VNet links and DNS records in the central private DNS zones.
+DNS_RG_ID="${KATO_DNS_ZONE_RG_ID:-}"   # e.g. /subscriptions/<id>/resourceGroups/liq-hq-dnszones
+if [[ -n "$DNS_RG_ID" ]]; then
+  log "Allow both identities to use the central private DNS zones"
+  assign "$SP_ID_DEV" "Private DNS Zone Contributor" "$DNS_RG_ID"
+  assign "$SP_ID_PROD" "Private DNS Zone Contributor" "$DNS_RG_ID"
+else
+  echo "⚠ KATO_DNS_ZONE_RG_ID not set: ask the Networks team to grant 'Private DNS Zone Contributor' on liq-hq-dnszones"
+  echo "  to the service principals kato-github-dev ($SP_ID_DEV) and kato-github-prod ($SP_ID_PROD)."
+fi
 
 cat <<EOF
 

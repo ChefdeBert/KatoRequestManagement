@@ -13,8 +13,44 @@ param redisLocation string = location
 
 param tags object = {}
 
+// ── Network (ranges allocated by the Networks team) ──────────────────
 @description('VNet address space for this environment.')
 param vnetAddressPrefix string
+
+@description('Container Apps subnet, inside vnetAddressPrefix. Minimum /27.')
+param acaSubnetPrefix string
+
+@description('PostgreSQL subnet, inside vnetAddressPrefix. Minimum /28.')
+param postgresSubnetPrefix string
+
+@description('Private endpoint subnet, inside vnetAddressPrefix. Minimum /28.')
+param privateEndpointSubnetPrefix string
+
+@description('Custom DNS servers for the VNet (central resolvers). Empty = Azure-provided DNS.')
+param dnsServers array = []
+
+// ── Access ───────────────────────────────────────────────────────────
+@description('Private IP only: Kato is reachable from the corporate network, not the internet.')
+param internalOnly bool = true
+
+@description('VNets hosting the central DNS resolvers. The app\'s private DNS zone is linked to them so employees can resolve Kato.')
+param dnsResolverVnetIds array = []
+
+// ── Private DNS ──────────────────────────────────────────────────────
+@description('Resource group holding the central private DNS zones (e.g. liq-hq-dnszones). Empty = Kato creates its own zones.')
+param privateDnsZoneResourceGroup string = ''
+
+@description('Subscription of privateDnsZoneResourceGroup.')
+param privateDnsZoneSubscriptionId string = subscription().subscriptionId
+
+@description('Link the Kato VNet to the central zones. Set false if the Networks team creates spoke links themselves.')
+param linkVnetToCentralDnsZones bool = true
+
+@description('Private DNS zone for PostgreSQL. Must end in .postgres.database.azure.com.')
+param postgresPrivateDnsZoneName string = 'privatelink.postgres.database.azure.com'
+
+@description('Private DNS zone for Azure Managed Redis private endpoints.')
+param redisPrivateDnsZoneName string = 'privatelink.redis.azure.net'
 
 param enableNatGateway bool
 
@@ -60,9 +96,42 @@ module network 'modules/network.bicep' = {
     namePrefix: namePrefix
     tags: allTags
     addressPrefix: vnetAddressPrefix
+    acaSubnetPrefix: acaSubnetPrefix
+    postgresSubnetPrefix: postgresSubnetPrefix
+    privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
+    dnsServers: dnsServers
     enableNatGateway: enableNatGateway
   }
 }
+
+var useCentralDns = !empty(privateDnsZoneResourceGroup)
+var dnsLinkName = 'vnet-${namePrefix}'
+
+module dnsCentral 'modules/dns-central.bicep' = if (useCentralDns) {
+  name: 'kato-${environmentName}-dns-central'
+  scope: resourceGroup(privateDnsZoneSubscriptionId, useCentralDns ? privateDnsZoneResourceGroup : resourceGroup().name)
+  params: {
+    vnetId: network.outputs.vnetId
+    linkName: dnsLinkName
+    postgresZoneName: postgresPrivateDnsZoneName
+    redisZoneName: redisPrivateDnsZoneName
+    createVnetLinks: linkVnetToCentralDnsZones
+  }
+}
+
+module dnsLocal 'modules/dns-local.bicep' = if (!useCentralDns) {
+  name: 'kato-dns-local'
+  params: {
+    tags: allTags
+    vnetId: network.outputs.vnetId
+    linkName: dnsLinkName
+    postgresZoneName: postgresPrivateDnsZoneName
+    redisZoneName: redisPrivateDnsZoneName
+  }
+}
+
+var postgresZoneId = useCentralDns ? dnsCentral!.outputs.postgresZoneId : dnsLocal!.outputs.postgresZoneId
+var redisZoneId = useCentralDns ? dnsCentral!.outputs.redisZoneId : dnsLocal!.outputs.redisZoneId
 
 module platform 'modules/platform.bicep' = {
   name: 'kato-platform'
@@ -83,8 +152,8 @@ module postgres 'modules/postgres.bicep' = {
     namePrefix: namePrefix
     tags: allTags
     isProd: isProd
-    vnetId: network.outputs.vnetId
     subnetId: network.outputs.postgresSubnetId
+    privateDnsZoneId: postgresZoneId
     keyVaultName: platform.outputs.keyVaultName
     adminPassword: postgresAdminPassword
   }
@@ -97,8 +166,8 @@ module redis 'modules/redis.bicep' = {
     namePrefix: namePrefix
     tags: allTags
     isProd: isProd
-    vnetId: network.outputs.vnetId
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    privateDnsZoneId: redisZoneId
     keyVaultName: platform.outputs.keyVaultName
   }
 }
@@ -117,6 +186,7 @@ module apps 'modules/containerapps.bicep' = {
     keyVaultUri: platform.outputs.keyVaultUri
     deployApps: deployApps
     imageTag: imageTag
+    internalOnly: internalOnly
     customDomain: customDomain
     customDomainCertificateName: customDomainCertificateName
     settings: union(settings, { AZURE_AD_TENANT_ID: empty(settings.?AZURE_AD_TENANT_ID ?? '') ? tenant().tenantId : settings.AZURE_AD_TENANT_ID })
@@ -128,6 +198,18 @@ module apps 'modules/containerapps.bicep' = {
   dependsOn: [ postgres, redis ]
 }
 
+// Internal environments need a private DNS zone for their default domain.
+module appDns 'modules/dns-app.bicep' = if (internalOnly) {
+  name: 'kato-${environmentName}-dns-app'
+  scope: resourceGroup(useCentralDns ? privateDnsZoneSubscriptionId : subscription().subscriptionId, useCentralDns ? privateDnsZoneResourceGroup : resourceGroup().name)
+  params: {
+    tags: allTags
+    zoneName: apps.outputs.defaultDomain
+    privateIp: apps.outputs.staticIp
+    linkVnetIds: concat([ network.outputs.vnetId ], dnsResolverVnetIds)
+  }
+}
+
 output acrName string = platform.outputs.acrName
 output acrLoginServer string = platform.outputs.acrLoginServer
 output keyVaultName string = platform.outputs.keyVaultName
@@ -137,4 +219,5 @@ output containerAppsEnvironment string = apps.outputs.environmentName
 output publicUrl string = apps.outputs.publicUrl
 output entraRedirectUri string = '${apps.outputs.publicUrl}/api/auth/callback/azure-ad'
 output outboundIp string = network.outputs.natPublicIp
-output customDomainVerification string = 'Add TXT asuid.<host> and CNAME <host> → kato-app.${apps.outputs.defaultDomain}'
+output appPrivateIp string = apps.outputs.staticIp
+output appDnsZone string = internalOnly ? apps.outputs.defaultDomain : ''
