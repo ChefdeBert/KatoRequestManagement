@@ -50,7 +50,7 @@ Bicep writes `database-url`, `redis-url` and `postgres-admin-password` into Key 
     | Key Vault secrets | `*.vault.azure.net` (or the `AzureKeyVault` service tag) |
     | Logs to Log Analytics | `*.ods.opinsights.azure.com`, `*.oms.opinsights.azure.com` (or the `AzureMonitor` service tag) |
     | Kato: AI assistant and assessments | `api.anthropic.com` |
-    | Kato: Jira and Confluence | `liquidtelecom.atlassian.net` |
+    | Kato: Jira and Confluence | `liquidtelecom.atlassian.net` (prod Jira and Confluence; dev Confluence) and `liquidtelecom-sandbox.atlassian.net` (dev Jira) |
     | Kato: email, only if SMTP is enabled | Your SMTP host, on TCP 587 |
 
     Postgres and Redis traffic stays inside the VNet, so it needs no firewall rule.

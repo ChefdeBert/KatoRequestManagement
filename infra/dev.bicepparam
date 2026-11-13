@@ -67,15 +67,18 @@ param settings = {
   ANTHROPIC_MODEL: 'claude-sonnet-5-5'
   ASSESSMENT_MODEL: ''
 
-  // Point dev at a sandbox project and space so test requests never reach the real backlog
+  // Jira: separate sandbox site, so test requests never reach the real backlog
   JIRA_BASE_URL: 'https://liquidtelecom-sandbox.atlassian.net/'
   JIRA_EMAIL: 'svc-kato@cassava.tech'
   JIRA_PROJECT_KEY: 'KATODEV'
   JIRA_SYNC_MAX_ATTEMPTS: '3'
   JIRA_CUSTOM_FIELDS: ''
 
+  // Confluence: the PRODUCTION site, in its own KATODEV space. Set explicitly, because Kato otherwise
+  // assumes Confluence lives on the Jira site (here the sandbox). Same service account and API token.
   CONFLUENCE_ENABLED: 'true'
-  CONFLUENCE_SPACE_KEY: 'TODO-sandbox-space'
+  CONFLUENCE_BASE_URL: 'https://liquidtelecom.atlassian.net/wiki'
+  CONFLUENCE_SPACE_KEY: 'KATODEV'
   CONFLUENCE_PARENT_PAGE_ID: ''
 
   SMTP_HOST: ''

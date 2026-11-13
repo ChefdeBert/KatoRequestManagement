@@ -43,7 +43,7 @@ param appMaxReplicas = 6
 
 param tags = {
   owner: 'ai-software-factory'
-  'cost-centre': 'TODO'
+  'cost-centre': 'IT'
 }
 
 param useSmtpPassword = false
@@ -74,8 +74,9 @@ param settings = {
   JIRA_SYNC_MAX_ATTEMPTS: '8'
   JIRA_CUSTOM_FIELDS: ''
 
-  // Confluence Cloud (uses the Jira site and credentials)
+  // Confluence Cloud: production site, KATO space (Jira service account credentials)
   CONFLUENCE_ENABLED: 'true'
+  CONFLUENCE_BASE_URL: 'https://liquidtelecom.atlassian.net/wiki'
   CONFLUENCE_SPACE_KEY: 'KATO'
   CONFLUENCE_PARENT_PAGE_ID: ''
 
