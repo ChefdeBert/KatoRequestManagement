@@ -2,33 +2,209 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Cassava brand tokens (Marketing UI system). Tailwind exposes the same values as `brand-*` colours. */
+:root {
+  /* Primary */
+  --brand-primary: #001d58; /* Cassava Navy: headings, body text */
+  --brand-primary-deep: #00082f; /* Navy 2 */
+  --brand-accent: #00f19c; /* Cassava Green: highlights, signal */
+  --brand-secondary: #006ea7; /* Cassava Blue: sub-headings, links */
+
+  /* Secondary (accents and charts only) */
+  --brand-secondary-dark: #004577;
+  --brand-light1: #57accf;
+  --brand-light2: #ade9f7;
+  --brand-highlight: #8d4fe3; /* Purple */
+
+  /* Neutrals */
+  --brand-surface: #eef3ff;
+  --brand-border: #d0d8e4;
+  --brand-text: #001d58;
+
+  /* Chart palette (use in this order) */
+  --brand-chart-1: #001d58;
+  --brand-chart-2: #00f19c;
+  --brand-chart-3: #006ea7;
+  --brand-chart-4: #8d4fe3;
+  --brand-chart-5: #57accf;
+  --brand-chart-6: #004577;
+  --brand-chart-7: #ade9f7;
+  --brand-chart-8: #00082f;
+}
+
 @layer base {
   :root {
+    /* shadcn/ui semantic tokens mapped onto the brand palette (HSL channels) */
     --background: 0 0% 100%;
-    --foreground: 240 10% 8%;
+    --foreground: 220 100% 17%; /* Navy */
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 8%;
+    --card-foreground: 220 100% 17%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 8%;
-    --primary: 262 70% 46%;
+    --popover-foreground: 220 100% 17%;
+    --primary: 220 100% 17%; /* Navy */
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 5% 95%;
-    --secondary-foreground: 240 6% 12%;
-    --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 44%;
-    --accent: 240 5% 94%;
-    --accent-foreground: 240 6% 12%;
+    --secondary: 222 100% 97%; /* Surface */
+    --secondary-foreground: 220 100% 17%;
+    --muted: 222 100% 97%;
+    --muted-foreground: 218 28% 42%;
+    --accent: 222 100% 95%;
+    --accent-foreground: 220 100% 17%;
     --destructive: 0 72% 50%;
     --destructive-foreground: 0 0% 100%;
-    --border: 240 6% 90%;
-    --input: 240 6% 88%;
-    --ring: 262 70% 46%;
-    --radius: 0.6rem;
+    --border: 216 27% 85%; /* Brand border */
+    --input: 216 27% 82%;
+    --ring: 200 100% 33%; /* Cassava Blue */
+    --radius: 0.75rem;
   }
   * {
     @apply border-border;
   }
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
   body {
-    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    @apply font-sans;
+    font-feature-settings: 'tnum' 0;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-heading;
+  }
+  ::selection {
+    background: rgb(0 241 156 / 0.35);
+    color: var(--brand-primary-deep);
+  }
+}
+
+@layer components {
+  /* Animated brand gradient text, e.g. hero headlines */
+  .text-gradient-brand {
+    background-image: linear-gradient(100deg, #00f19c 0%, #ade9f7 35%, #57accf 60%, #8d4fe3 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: gradient-x 8s ease infinite;
+  }
+
+  /* Faint dotted grid, faded out towards the edges */
+  .bg-dot-grid {
+    background-image: radial-gradient(rgb(173 233 247 / 0.18) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: radial-gradient(ellipse at 50% 40%, black 30%, transparent 75%);
+  }
+  .bg-dot-grid-light {
+    background-image: radial-gradient(rgb(0 29 88 / 0.08) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  /* Frosted glass panel for dark backgrounds */
+  .glass-dark {
+    background: linear-gradient(160deg, rgb(255 255 255 / 0.09), rgb(255 255 255 / 0.03));
+    border: 1px solid rgb(173 233 247 / 0.16);
+    backdrop-filter: blur(18px) saturate(140%);
+  }
+
+  /* Pointer-following spotlight (see components/motion/spotlight.tsx) */
+  .spotlight {
+    position: relative;
+    isolation: isolate;
+  }
+  .spotlight::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 50%), rgb(0 241 156 / 0.16), transparent 45%);
+    z-index: -1;
+  }
+  .spotlight:hover::before {
+    opacity: 1;
+  }
+
+  /* Gradient hairline border that animates around a card */
+  .ring-gradient {
+    position: relative;
+  }
+  .ring-gradient::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(110deg, #00f19c, #57accf, #8d4fe3, #00f19c);
+    background-size: 300% 100%;
+    animation: gradient-x 6s ease infinite;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Scroll reveal (see components/motion/reveal.tsx) */
+  .reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition:
+      opacity 0.7s cubic-bezier(0.2, 0.8, 0.2, 1),
+      transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .reveal[data-visible='true'] {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Staggered entrance for server-rendered lists: set --i on each item */
+  .stagger-in {
+    animation: line-in 0.5s ease-out backwards; /* backwards, not both: lets hover transforms work afterwards */
+    animation-delay: calc(var(--i, 0) * 45ms);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(0 29 88 / 0.2) transparent;
+  }
+}
+
+/* Used by the component classes above (Tailwind only emits keyframes for animate-* utilities it sees) */
+@keyframes gradient-x {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+@keyframes line-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
   }
 }

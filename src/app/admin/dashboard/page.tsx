@@ -1,7 +1,9 @@
 import { BookOpen, ExternalLink, Search, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { Aurora, KatoLogo } from '@/components/brand';
 import { BrdPreview } from '@/components/brd-preview';
+import { CountUp, Spotlight } from '@/components/motion';
 import { LevelBadge, RouteBadge, StatusBadge, SyncBadge, SyncStateBadge } from '@/components/status-badge';
 import { Badge, Button, Card, Input, selectClass } from '@/components/ui';
 import {
@@ -51,7 +53,7 @@ const usd = (v: number | null) => formatUsd(v, { compact: true });
 
 export default async function AdminDashboardPage({ searchParams }: { searchParams: Promise<SP> }) {
   const user = await getCurrentUser();
-  if (!user) redirect('/api/auth/signin?callbackUrl=/admin/dashboard');
+  if (!user) redirect('/signin?callbackUrl=/admin/dashboard');
   if (!isStaff(user.role)) redirect('/request');
 
   const sp = await searchParams;
@@ -68,46 +70,61 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="min-h-dvh bg-muted/30">
-      <header className="flex items-center justify-between border-b bg-background px-6 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">K</div>
-          <div>
-            <p className="text-sm font-semibold leading-tight">Kato · Demand management</p>
-            <p className="text-xs text-muted-foreground">AI Software Factory intake workspace</p>
-          </div>
-        </div>
+    <div className="relative min-h-dvh bg-brand-surface">
+      <Aurora className="fixed" />
+      <header className="relative z-20 flex items-center justify-between bg-gradient-to-r from-brand-navy-deep via-brand-navy to-brand-blue-dark px-6 py-3 text-white shadow-lg shadow-brand-navy/20 animate-in fade-in slide-in-from-top-2 duration-500">
+        <Link href="/admin/dashboard" className="transition-opacity hover:opacity-90">
+          <KatoLogo tone="dark" subtitle="Demand management · AI Software Factory" />
+        </Link>
         <div className="flex items-center gap-3 text-sm">
-          <Badge variant="violet">
+          <Badge className="border-brand-green/40 bg-brand-green/15 text-brand-green">
             <ShieldCheck className="mr-1 h-3 w-3" />
             {user.role === 'ADMIN' ? 'Admin' : 'IT reviewer'}
           </Badge>
-          <span className="text-muted-foreground">{user.name}</span>
-          <Button asChild size="sm" variant="outline">
+          <span className="hidden text-brand-light2 sm:inline">{user.name}</span>
+          <Button asChild size="sm" variant="glass">
             <Link href="/request">Raise a request</Link>
           </Button>
         </div>
       </header>
 
-      <div className="space-y-5 p-6">
+      <div className="relative z-10 space-y-5 p-6">
         {/* ── KPI tiles ─────────────────────────────────── */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {STATUSES.map((s) => (
-            <Link key={s} href={href({}, { status: s })}>
-              <Card className={cn('p-4 transition-colors hover:border-primary/50', filters.status === s && 'border-primary ring-1 ring-primary')}>
-                <p className="text-xs text-muted-foreground">{STATUS_LABEL[s]}</p>
-                <p className="mt-1 text-2xl font-semibold tabular-nums">{counts[s]}</p>
-              </Card>
+          {STATUSES.map((s, i) => (
+            <Link key={s} href={href({}, { status: s })} className="stagger-in group" style={{ '--i': i } as React.CSSProperties}>
+              <Spotlight
+                className={cn(
+                  'relative overflow-hidden rounded-2xl border bg-white p-4 shadow-sm transition-all duration-300 group-hover:-translate-y-1 group-hover:border-brand-green/60 group-hover:shadow-lift',
+                  filters.status === s && 'border-brand-blue ring-2 ring-brand-blue/30',
+                )}
+              >
+                <span
+                  className={cn('absolute inset-x-0 top-0 h-1 transition-opacity', filters.status === s ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')}
+                  style={{ background: 'linear-gradient(90deg,#006EA7,#00F19C)' }}
+                  aria-hidden
+                />
+                <p className="text-xs font-medium text-muted-foreground">{STATUS_LABEL[s]}</p>
+                <p className="mt-1 font-heading text-3xl font-bold tabular-nums text-brand-navy">
+                  <CountUp value={counts[s]} />
+                </p>
+              </Spotlight>
             </Link>
           ))}
         </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <ValueTile label="Open pipeline EBITDA / yr" value={usd(pipeline.openEbitdaUsd)} hint={`Revenue ${usd(pipeline.openRevenueUsd)} · cash flow ${usd(pipeline.openCashFlowUsd)}`} />
-          <ValueTile label="Approved EBITDA / yr" value={usd(pipeline.approvedEbitdaUsd)} hint="Assessed value of approved requests" />
-          <Link href={href({}, { route: 'AUTONOMOUS' })}>
-            <ValueTile label="Eligible for autonomous route" value={String(pipeline.autonomousEligible)} hint="Open requests recommended Autonomous" />
+          <ValueTile i={4} featured label="Open pipeline EBITDA / yr" value={usd(pipeline.openEbitdaUsd)} hint={`Revenue ${usd(pipeline.openRevenueUsd)} · cash flow ${usd(pipeline.openCashFlowUsd)}`} />
+          <ValueTile i={5} label="Approved EBITDA / yr" value={usd(pipeline.approvedEbitdaUsd)} hint="Assessed value of approved requests" />
+          <Link href={href({}, { route: 'AUTONOMOUS' })} className="group">
+            <ValueTile i={6} label="Eligible for autonomous route" value={<CountUp value={pipeline.autonomousEligible} />} hint="Open requests recommended Autonomous" />
           </Link>
-          <ValueTile label="Awaiting assessment" value={String(pipeline.awaitingAssessment)} hint="Pending or failed value / route assessment" warn={pipeline.awaitingAssessment > 0} />
+          <ValueTile
+            i={7}
+            label="Awaiting assessment"
+            value={<CountUp value={pipeline.awaitingAssessment} />}
+            hint="Pending or failed value / route assessment"
+            warn={pipeline.awaitingAssessment > 0}
+          />
         </div>
 
         {/* ── Filters ───────────────────────────────────── */}
@@ -163,10 +180,10 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
 
         <div className={cn('grid gap-5', detail && 'xl:grid-cols-[minmax(0,1fr)_minmax(0,46rem)]')}>
           {/* ── Queue ─────────────────────────────────── */}
-          <Card className="overflow-hidden">
-            <div className="overflow-x-auto">
+          <Card className="overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="scrollbar-thin overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground">
+                <thead className="border-b bg-brand-navy text-left text-xs text-brand-light2">
                   <tr>
                     <th className="px-4 py-2.5 font-medium">Ref</th>
                     <th className="px-4 py-2.5 font-medium">Request</th>
@@ -187,8 +204,15 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
                       </td>
                     </tr>
                   )}
-                  {items.map((r) => (
-                    <tr key={r.id} className={cn('border-b last:border-0 hover:bg-muted/40', r.id === selectedId && 'bg-primary/5')}>
+                  {items.map((r, i) => (
+                    <tr
+                      key={r.id}
+                      style={{ '--i': i } as React.CSSProperties}
+                      className={cn(
+                        'stagger-in border-b transition-colors duration-200 last:border-0 hover:bg-brand-surface [&>td:first-child]:border-l-[3px] [&>td:first-child]:border-l-transparent hover:[&>td:first-child]:border-l-brand-green',
+                        r.id === selectedId && 'bg-brand-light2/25 [&>td:first-child]:border-l-brand-blue',
+                      )}
+                    >
                       <td className="px-4 py-3 font-mono text-xs">
                         <Link href={href(sp, { selected: r.id, tab: undefined })} className="hover:underline">
                           {formatRef(r.number)}
@@ -254,7 +278,7 @@ export default async function AdminDashboardPage({ searchParams }: { searchParam
             )}
           </Card>
 
-          {detail && <DetailPanel detail={detail} tab={tab} sp={sp} user={user} />}
+          {detail && <DetailPanel key={detail.id} detail={detail} tab={tab} sp={sp} user={user} />}
         </div>
       </div>
     </div>
@@ -268,7 +292,7 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
   const assessment = detail.assessments[0];
 
   return (
-    <Card className="flex max-h-[calc(100dvh-10rem)] flex-col overflow-hidden xl:sticky xl:top-6">
+    <Card className="flex max-h-[calc(100dvh-10rem)] flex-col overflow-hidden shadow-lift animate-in fade-in slide-in-from-right-8 duration-500 xl:sticky xl:top-6">
       <div className="space-y-3 border-b p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -338,7 +362,10 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
             <Link
               key={t}
               href={href(sp, { tab: t })}
-              className={cn('-mb-px border-b-2 px-3 py-2 text-sm capitalize', tab === t ? 'border-primary font-medium' : 'border-transparent text-muted-foreground hover:text-foreground')}
+              className={cn(
+                '-mb-px border-b-2 px-3 py-2 text-sm capitalize transition-colors duration-200',
+                tab === t ? 'border-brand-green font-semibold text-brand-navy' : 'border-transparent text-muted-foreground hover:border-brand-border hover:text-brand-navy',
+              )}
             >
               {t === 'assessment' ? 'Assessment' : t === 'brd' ? `BRD${brdDoc ? ` v${brdDoc.version}` : ''}` : t === 'jira' ? `Jira (${detail.jiraSyncTasks.length})` : t === 'audit' ? `Audit (${detail.approvalLogs.length})` : `Transcript (${detail.messages.length})`}
             </Link>
@@ -346,7 +373,7 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
         </nav>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5">
+      <div key={tab} className="scrollbar-thin flex-1 overflow-y-auto p-5 animate-in fade-in duration-300">
         {tab === 'assessment' && <AssessmentView detail={detail} assessment={assessment} />}
         {tab === 'brd' && <BrdPreview draft={asDraft(brdDoc?.content ?? detail.draftBrd)} reference={reference} />}
 
@@ -430,13 +457,35 @@ function DetailPanel({ detail, tab, sp, user }: { detail: RequestDetail; tab: Ta
   );
 }
 
-function ValueTile({ label, value, hint, warn }: { label: string; value: string; hint: string; warn?: boolean }) {
+function ValueTile({
+  label,
+  value,
+  hint,
+  warn,
+  featured,
+  i = 0,
+}: {
+  label: string;
+  value: React.ReactNode;
+  hint: string;
+  warn?: boolean;
+  featured?: boolean;
+  i?: number;
+}) {
   return (
-    <Card className={cn('p-4', warn && 'border-amber-300')}>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
-      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{hint}</p>
-    </Card>
+    <Spotlight
+      style={{ '--i': i } as React.CSSProperties}
+      className={cn(
+        'stagger-in relative h-full overflow-hidden rounded-2xl border p-4 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lift',
+        featured ? 'border-brand-navy bg-gradient-to-br from-brand-navy to-brand-navy-deep text-white' : 'bg-white',
+        warn && 'border-amber-300',
+      )}
+    >
+      {featured && <div className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-brand-green/25 blur-2xl" aria-hidden />}
+      <p className={cn('text-xs font-medium', featured ? 'text-brand-light2' : 'text-muted-foreground')}>{label}</p>
+      <p className={cn('mt-1 font-heading text-3xl font-bold tabular-nums', featured ? 'text-brand-green' : 'text-brand-navy')}>{value}</p>
+      <p className={cn('mt-0.5 truncate text-[11px]', featured ? 'text-brand-light2/70' : 'text-muted-foreground')}>{hint}</p>
+    </Spotlight>
   );
 }
 

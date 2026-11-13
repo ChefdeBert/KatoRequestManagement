@@ -119,6 +119,7 @@ if (devLoginEnabled) {
 
 export const authOptions: NextAuthOptions = {
   providers,
+  pages: { signIn: '/signin', error: '/signin' },
   session: { strategy: 'jwt', maxAge: 8 * 60 * 60 },
   callbacks: {
     async jwt({ token, account, profile, user }) {

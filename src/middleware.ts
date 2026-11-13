@@ -2,6 +2,7 @@ import { withAuth } from 'next-auth/middleware';
 
 /** Edge gate: authentication everywhere, staff role for /admin. Route handlers re-check. */
 export default withAuth({
+  pages: { signIn: '/signin' },
   callbacks: {
     authorized: ({ token, req }) => {
       if (!token) return false;

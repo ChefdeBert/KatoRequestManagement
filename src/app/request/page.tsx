@@ -11,7 +11,7 @@ export const metadata = { title: 'New request · Kato' };
 
 export default async function RequestPage({ searchParams }: { searchParams: Promise<{ id?: string; new?: string }> }) {
   const user = await getCurrentUser();
-  if (!user) redirect('/api/auth/signin?callbackUrl=/request');
+  if (!user) redirect('/signin?callbackUrl=/request');
 
   const { id } = await searchParams;
   if (!id) {

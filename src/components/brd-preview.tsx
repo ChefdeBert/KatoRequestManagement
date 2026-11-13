@@ -11,11 +11,39 @@ function Pending({ children = 'Kato will capture this during the conversation' }
   return <p className="text-sm italic text-muted-foreground/70">{children}</p>;
 }
 
-function Section({ n, title, missing, children }: { n: number; title: string; missing?: boolean; children: React.ReactNode }) {
+// Sections glow green when they go from "missing" to complete (the keyed remount replays the flash)
+function Section({
+  n,
+  title,
+  missing,
+  animate,
+  children,
+}: {
+  n: number;
+  title: string;
+  missing?: boolean;
+  animate?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <section className={cn('rounded-lg border-l-2 py-1 pl-4', missing ? 'border-amber-300' : 'border-primary/60')}>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        {n}. {title}
+    <section
+      key={missing ? 'missing' : 'done'}
+      className={cn(
+        'rounded-r-lg border-l-[3px] py-1.5 pl-4 transition-colors duration-700',
+        missing ? 'border-amber-300' : 'border-brand-green',
+        animate && !missing && 'animate-flash',
+      )}
+    >
+      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-brand-blue">
+        <span
+          className={cn(
+            'flex h-5 w-5 items-center justify-center rounded-full text-[10px] transition-colors duration-500',
+            missing ? 'bg-amber-100 text-amber-800' : 'bg-brand-navy text-white',
+          )}
+        >
+          {n}
+        </span>
+        {title}
       </h3>
       <div className="space-y-2 text-sm leading-relaxed">{children}</div>
     </section>
@@ -46,11 +74,14 @@ export function BrdPreview({
   missingKeys = [],
   reference,
   className,
+  animate = false,
 }: {
   draft: BRDDraft;
   missingKeys?: string[];
   reference?: string;
   className?: string;
+  /** Flash sections as they become complete (live editing only). */
+  animate?: boolean;
 }) {
   const m = new Set(missingKeys);
   const goals = arr<string>(draft.strategicGoals);
@@ -71,22 +102,22 @@ export function BrdPreview({
   return (
     <article className={cn('space-y-6', className)}>
       <header className="space-y-1 border-b pb-4">
-        <p className="text-xs font-medium uppercase tracking-widest text-primary">Business Requirements Document{reference ? ` · ${reference}` : ''}</p>
-        <h2 className={cn('text-xl font-semibold', !str(draft.title) && 'italic text-muted-foreground/70')}>
+        <p className="text-xs font-semibold uppercase tracking-widest text-brand-blue">Business Requirements Document{reference ? ` · ${reference}` : ''}</p>
+        <h2 className={cn('text-2xl font-bold tracking-tight text-brand-navy transition-all duration-500', !str(draft.title) && 'italic font-medium text-muted-foreground/70')}>
           {str(draft.title) ?? 'Untitled request'}
         </h2>
       </header>
 
-      <Section n={1} title="Problem statement" missing={m.has('problemStatement')}>
+      <Section animate={animate} n={1} title="Problem statement" missing={m.has('problemStatement')}>
         {str(draft.problemStatement) ? <p>{draft.problemStatement}</p> : <Pending />}
       </Section>
 
-      <Section n={2} title="Request summary & strategic goals" missing={m.has('summary') || m.has('strategicGoals')}>
+      <Section animate={animate} n={2} title="Request summary & strategic goals" missing={m.has('summary') || m.has('strategicGoals')}>
         {str(draft.summary) ? <p>{draft.summary}</p> : <Pending>Detailed summary pending</Pending>}
         {goals.length ? <Bullets items={goals} /> : <Pending>Strategic goals pending</Pending>}
       </Section>
 
-      <Section n={3} title="Ownership" missing={['sponsor', 'department', 'opco', 'businessUnit'].some((k) => m.has(k))}>
+      <Section animate={animate} n={3} title="Ownership" missing={['sponsor', 'department', 'opco', 'businessUnit'].some((k) => m.has(k))}>
         <dl className="space-y-1">
           <KV
             k="Business sponsor"
@@ -98,7 +129,7 @@ export function BrdPreview({
         </dl>
       </Section>
 
-      <Section n={4} title="Business impact & urgency" missing={m.has('impact') || m.has('urgency')}>
+      <Section animate={animate} n={4} title="Business impact & urgency" missing={m.has('impact') || m.has('urgency')}>
         <div className="space-y-3">
           <div>
             <LevelBadge level={draft.impact} prefix="Impact" />
@@ -112,7 +143,7 @@ export function BrdPreview({
         </div>
       </Section>
 
-      <Section n={5} title="Success criteria & KPIs" missing={m.has('successCriteria') || m.has('kpis')}>
+      <Section animate={animate} n={5} title="Success criteria & KPIs" missing={m.has('successCriteria') || m.has('kpis')}>
         {criteria.length ? <Bullets items={criteria} /> : <Pending>Success criteria pending</Pending>}
         {kpis.length ? (
           <table className="mt-2 w-full text-left text-sm">
@@ -138,16 +169,16 @@ export function BrdPreview({
         )}
       </Section>
 
-      <Section n={6} title="Financial impact (USD, annual)" missing={m.has('financialImpact')}>
+      <Section animate={animate} n={6} title="Financial impact (USD, annual)" missing={m.has('financialImpact')}>
         <FinancialImpact draft={draft} />
       </Section>
 
-      <Section n={7} title="Related tickets & systems">
+      <Section animate={animate} n={7} title="Related tickets & systems">
         {refs.length ? (
           <ul className="space-y-1">
             {refs.map((r, i) => (
               <li key={i}>
-                <span className="mr-2 rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{r.kind ?? 'REF'}</span>
+                <span className="mr-2 rounded bg-brand-surface px-1.5 py-0.5 font-mono text-xs text-brand-blue">{r.kind ?? 'REF'}</span>
                 {r.value}
                 {r.note && <span className="text-muted-foreground"> — {r.note}</span>}
               </li>
@@ -159,7 +190,7 @@ export function BrdPreview({
       </Section>
 
       {extras.length > 0 && (
-        <Section n={8} title="Context">
+        <Section animate={animate} n={8} title="Context">
           {extras.map(([label, items]) => (
             <div key={label}>
               <p className="font-medium">{label}</p>
@@ -170,7 +201,7 @@ export function BrdPreview({
       )}
 
       {openQs.length > 0 && (
-        <Section n={extras.length ? 9 : 8} title="Open questions for IT">
+        <Section animate={animate} n={extras.length ? 9 : 8} title="Open questions for IT">
           <Bullets items={openQs} />
         </Section>
       )}
@@ -187,9 +218,9 @@ function FinancialImpact({ draft }: { draft: BRDDraft }) {
         {FINANCIAL_LENSES.map((l) => {
           const v = val(f[l.key]);
           return (
-            <div key={l.key} className="rounded-md border bg-muted/30 p-2.5">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{l.short} / yr</p>
-              <p className={cn('mt-0.5 text-base font-semibold tabular-nums', v === undefined && 'text-muted-foreground/60')}>
+            <div key={l.key} className={cn('rounded-xl border p-2.5 transition-all duration-500', v === undefined ? 'bg-brand-surface/60' : 'border-brand-navy bg-brand-navy text-white shadow-lift')}>
+              <p className={cn('text-[11px] uppercase tracking-wide', v === undefined ? 'text-muted-foreground' : 'text-brand-light2')}>{l.short} / yr</p>
+              <p className={cn('mt-0.5 font-heading text-base font-bold tabular-nums', v === undefined ? 'text-muted-foreground/60' : 'text-brand-green')}>
                 {v === undefined ? 'Pending' : formatUsd(v, { compact: Math.abs(v) >= 100_000 })}
               </p>
             </div>

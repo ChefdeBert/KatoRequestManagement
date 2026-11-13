@@ -3,11 +3,13 @@
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import type { RequestStatus } from '@prisma/client';
-import { AlertTriangle, ArrowUp, CheckCircle2, FilePenLine, Loader2, RotateCcw, ShieldCheck, Square } from 'lucide-react';
+import { AlertTriangle, ArrowUp, CheckCircle2, FilePenLine, Loader2, RotateCcw, ShieldCheck, Sparkles, Square } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Aurora, KatoLogo, KatoMark } from '@/components/brand';
 import { BrdPreview } from '@/components/brd-preview';
+import { Spotlight } from '@/components/motion';
 import { StatusBadge } from '@/components/status-badge';
 import { Button, Progress, Textarea } from '@/components/ui';
 import { FIELD_LABELS, assessCompleteness, formatRef, mergeBrd, type BRDDraft, type BRDPatch } from '@/lib/brd';
@@ -63,6 +65,19 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
   }, [messages, initialDraft, initialIds]);
   const completeness = assessCompleteness(draft);
 
+  // One-off celebration when the BRD first becomes ready to submit during this session
+  const [celebrate, setCelebrate] = useState(false);
+  const wasReady = useRef(completeness.ready);
+  useEffect(() => {
+    if (completeness.ready && !wasReady.current) {
+      setCelebrate(true);
+      const t = setTimeout(() => setCelebrate(false), 1400);
+      wasReady.current = true;
+      return () => clearTimeout(t);
+    }
+    wasReady.current = completeness.ready;
+  }, [completeness.ready]);
+
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
   const redacted = (lastAssistant?.metadata as { redactions?: number } | undefined)?.redactions ?? 0;
   const busy = status === 'submitted' || status === 'streaming';
@@ -92,25 +107,24 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
   }
 
   return (
-    <div className="flex h-dvh flex-col bg-muted/30">
-      <header className="flex items-center justify-between gap-4 border-b bg-background px-5 py-3">
+    <div className="relative flex h-dvh flex-col bg-brand-surface">
+      <Aurora />
+      <header className="relative z-20 flex items-center justify-between gap-4 bg-gradient-to-r from-brand-navy-deep via-brand-navy to-brand-blue-dark px-5 py-3 text-white shadow-lg shadow-brand-navy/20 animate-in fade-in slide-in-from-top-2 duration-500">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">K</div>
-          <div>
-            <p className="text-sm font-semibold leading-tight">Kato</p>
-            <p className="text-xs text-muted-foreground">AI Software Factory · Request intake</p>
-          </div>
-          <span className="ml-3 font-mono text-xs text-muted-foreground">{reference}</span>
+          <Link href="/" className="transition-opacity hover:opacity-90">
+            <KatoLogo tone="dark" subtitle="AI Software Factory · Request intake" />
+          </Link>
+          <span className="ml-3 hidden rounded-md bg-white/10 px-2 py-0.5 font-mono text-xs text-brand-light2 sm:inline">{reference}</span>
           <StatusBadge status={request.status} />
         </div>
         <div className="flex items-center gap-2">
           {myRequests.length > 0 && (
             <details className="relative">
-              <summary className="cursor-pointer list-none rounded-md px-3 py-1.5 text-sm hover:bg-accent">My requests</summary>
-              <ul className="absolute right-0 z-20 mt-1 w-80 rounded-md border bg-popover p-1 shadow-md">
+              <summary className="cursor-pointer list-none rounded-lg px-3 py-1.5 text-sm font-medium text-brand-light2 transition-colors hover:bg-white/10 hover:text-white">My requests</summary>
+              <ul className="absolute right-0 z-30 mt-2 w-80 rounded-xl border bg-popover p-1 text-foreground shadow-xl shadow-brand-navy/20 animate-in fade-in zoom-in-95 slide-in-from-top-1">
                 {myRequests.map((r) => (
                   <li key={r.id}>
-                    <Link href={`/request?id=${r.id}`} className="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent">
+                    <Link href={`/request?id=${r.id}`} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-accent">
                       <span className="truncate">
                         <span className="font-mono text-xs text-muted-foreground">{formatRef(r.number)}</span> {r.title ?? 'Untitled'}
                       </span>
@@ -121,27 +135,39 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
               </ul>
             </details>
           )}
-          <Button asChild variant="outline" size="sm">
-            <Link href="/request?new=1">New request</Link>
+          <Button asChild variant="glass" size="sm">
+            <Link href="/request?new=1">
+              <Sparkles /> New request
+            </Link>
           </Button>
         </div>
       </header>
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
+      <main className="relative z-10 grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
         {/* ── Chat ─────────────────────────────────────────── */}
-        <section className="flex min-h-0 flex-col border-r bg-background" aria-label="Conversation with Kato">
-          <div className="flex-1 space-y-5 overflow-y-auto px-5 py-6">
+        <section className="flex min-h-0 flex-col border-r bg-white/75 backdrop-blur-xl" aria-label="Conversation with Kato">
+          <div className="scrollbar-thin flex-1 space-y-5 overflow-y-auto px-5 py-6">
             <Bubble role="assistant">
               {`Hi ${user.name.split(' ')[0]}, I'm Kato, the AI Software Factory's business analyst. Tell me about the problem you'd like solved or the feature you need, in your own words. I'll ask a few follow-up questions and build the Business Requirements Document on the right as we go.`}
             </Bubble>
 
             {messages.length === 0 && !readOnly && (
-              <div className="flex flex-wrap gap-2 pl-10">
-                {STARTERS.map((s) => (
-                  <button key={s} onClick={() => send(s)} className="rounded-full border px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground">
-                    {s}
-                  </button>
-                ))}
+              <div className="space-y-2 pl-10">
+                <p className="text-xs font-semibold uppercase tracking-wider text-brand-blue">Not sure where to start? Try one of these</p>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {STARTERS.map((s, i) => (
+                    <Spotlight
+                      key={s}
+                      className="rounded-xl border border-brand-border bg-white shadow-sm transition-all duration-300 animate-in fade-in slide-in-from-bottom-3 hover:-translate-y-1 hover:border-brand-green/60 hover:shadow-lift [animation-fill-mode:backwards]"
+                      style={{ animationDelay: `${300 + i * 120}ms` }}
+                    >
+                      <button onClick={() => send(s)} className="group h-full w-full p-3 text-left text-xs leading-relaxed text-brand-navy/80">
+                        <Sparkles className="mb-1.5 h-4 w-4 text-brand-blue transition-transform duration-300 group-hover:rotate-12 group-hover:scale-125 group-hover:text-brand-green" />
+                        {s}
+                      </button>
+                    </Spotlight>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -156,12 +182,18 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
             ))}
 
             {status === 'submitted' && (
-              <div className="flex items-center gap-2 pl-10 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Kato is thinking…
+              <div className="flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2" role="status">
+                <KatoMark className="h-7 w-7" glow />
+                <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-sm border border-brand-border bg-white px-4 py-3 shadow-sm">
+                  {[0, 150, 300].map((d) => (
+                    <span key={d} className="h-2 w-2 animate-typing rounded-full bg-brand-blue" style={{ animationDelay: `${d}ms` }} />
+                  ))}
+                  <span className="sr-only">Kato is thinking…</span>
+                </div>
               </div>
             )}
             {error && (
-              <div className="ml-10 flex items-center gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+              <div className="ml-10 flex items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm animate-in fade-in slide-in-from-bottom-1">
                 <AlertTriangle className="h-4 w-4 text-destructive" />
                 <span className="flex-1">Kato could not respond. {error.message}</span>
                 <Button size="sm" variant="outline" onClick={() => regenerate()}>
@@ -175,15 +207,15 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
           {readOnly ? (
             <StatusPanel request={request} />
           ) : (
-            <div className="border-t p-4">
+            <div className="border-t border-brand-border/70 bg-white/80 p-4 backdrop-blur">
               {redacted > 0 && (
-                <p className="mb-2 flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <p className="mb-2 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 animate-in fade-in slide-in-from-bottom-1">
                   <ShieldCheck className="h-4 w-4" />
                   Kato removed {redacted} sensitive value{redacted > 1 ? 's' : ''} (credentials, tokens or card numbers) before processing. They were not stored.
                 </p>
               )}
               <form
-                className="relative"
+                className="group/input relative rounded-2xl transition-shadow duration-300 focus-within:shadow-[0_0_0_4px_rgb(0_110_167/0.12),0_12px_32px_-12px_rgb(0_110_167/0.45)]"
                 onSubmit={(e) => {
                   e.preventDefault();
                   send(input);
@@ -201,15 +233,15 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
                   placeholder={messages.length ? 'Reply to Kato…' : 'Describe the problem or feature you need…'}
                   rows={3}
                   maxLength={8000}
-                  className="resize-none pr-14"
+                  className="resize-none rounded-2xl border-brand-border bg-white pr-14 focus-visible:ring-0"
                   aria-label="Message Kato"
                 />
                 {busy ? (
-                  <Button type="button" size="icon" variant="secondary" className="absolute bottom-2 right-2" onClick={() => stop()} aria-label="Stop">
+                  <Button type="button" size="icon" variant="secondary" className="absolute bottom-2.5 right-2.5 rounded-xl" onClick={() => stop()} aria-label="Stop">
                     <Square />
                   </Button>
                 ) : (
-                  <Button type="submit" size="icon" className="absolute bottom-2 right-2" disabled={!input.trim()} aria-label="Send">
+                  <Button type="submit" size="icon" variant="brand" className="absolute bottom-2.5 right-2.5 rounded-xl" disabled={!input.trim()} aria-label="Send">
                     <ArrowUp />
                   </Button>
                 )}
@@ -221,20 +253,35 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
 
         {/* ── Live BRD ─────────────────────────────────────── */}
         <section className="flex min-h-0 flex-col" aria-label="Live BRD preview">
-          <div className="border-b bg-background px-5 py-3">
+          <div className="border-b border-brand-border/70 bg-white/80 px-5 py-3 backdrop-blur">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <div className="mb-1 flex items-center justify-between text-xs">
-                  <span className="font-medium">BRD completeness</span>
-                  <span className="tabular-nums text-muted-foreground">{completeness.percent}%</span>
+                  <span className="font-semibold text-brand-navy">BRD completeness</span>
+                  <span className={cn('font-semibold tabular-nums transition-colors', completeness.ready ? 'text-emerald-600' : 'text-brand-blue')}>
+                    {completeness.percent}%
+                  </span>
                 </div>
                 <Progress value={completeness.percent} />
               </div>
               {!readOnly && (
-                <Button onClick={submit} disabled={!completeness.ready || submitting || busy}>
-                  {submitting ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-                  Submit for IT review
-                </Button>
+                <div className="relative">
+                  {celebrate && (
+                    <>
+                      <span className="pointer-events-none absolute inset-0 animate-burst rounded-lg bg-brand-green/50" aria-hidden />
+                      <span className="pointer-events-none absolute inset-0 animate-burst rounded-lg border-2 border-brand-green [animation-delay:150ms]" aria-hidden />
+                    </>
+                  )}
+                  <Button
+                    onClick={submit}
+                    variant={completeness.ready ? 'brand' : 'default'}
+                    className={cn(completeness.ready && !submitting && !busy && 'ring-gradient')}
+                    disabled={!completeness.ready || submitting || busy}
+                  >
+                    {submitting ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
+                    Submit for IT review
+                  </Button>
+                </div>
               )}
             </div>
             {!readOnly && completeness.missing.length > 0 && (
@@ -244,9 +291,10 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
             )}
             {submitError && <p className="mt-2 text-xs text-destructive">{submitError}</p>}
           </div>
-          <div className="flex-1 overflow-y-auto p-5">
-            <div className="mx-auto max-w-2xl rounded-xl border bg-background p-6 shadow-sm">
-              <BrdPreview draft={draft} missingKeys={readOnly ? [] : completeness.missingKeys} reference={reference} />
+          <div className="scrollbar-thin flex-1 overflow-y-auto p-5">
+            <div className="relative mx-auto max-w-2xl overflow-hidden rounded-2xl border border-brand-border bg-white p-6 shadow-lift animate-in fade-in slide-in-from-bottom-4 duration-700">
+              <div className="absolute inset-x-0 top-0 h-1 animate-gradient-x bg-[linear-gradient(90deg,#001D58,#006EA7,#00F19C,#8D4FE3,#001D58)] bg-[length:300%_100%]" aria-hidden />
+              <BrdPreview draft={draft} missingKeys={readOnly ? [] : completeness.missingKeys} reference={reference} animate={!readOnly} />
             </div>
           </div>
         </section>
@@ -258,12 +306,19 @@ export function KatoWorkspace({ request, initialMessages, initialDraft, user, my
 function Bubble({ role, children }: { role: 'user' | 'assistant'; children: React.ReactNode }) {
   const mine = role === 'user';
   return (
-    <div className={cn('flex gap-3', mine && 'flex-row-reverse')}>
-      {!mine && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">K</div>}
+    <div
+      className={cn(
+        'flex gap-3 animate-in fade-in duration-500',
+        mine ? 'flex-row-reverse slide-in-from-right-4' : 'slide-in-from-left-4',
+      )}
+    >
+      {!mine && <KatoMark className="mt-0.5 h-7 w-7" />}
       <div
         className={cn(
-          'max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed',
-          mine ? 'rounded-tr-sm bg-primary text-primary-foreground' : 'rounded-tl-sm bg-muted',
+          'max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm',
+          mine
+            ? 'rounded-tr-sm bg-gradient-to-br from-brand-blue to-brand-navy text-white shadow-brand-navy/20'
+            : 'rounded-tl-sm border border-brand-border bg-white text-brand-navy',
         )}
       >
         {children}
@@ -277,8 +332,13 @@ function BrdUpdateChip({ part }: { part: ToolPart }) {
   const done = part.state === 'output-available';
   const failed = part.state === 'output-error';
   return (
-    <div className="ml-10 inline-flex max-w-[85%] items-center gap-2 rounded-md border border-dashed px-2.5 py-1 text-xs text-muted-foreground">
-      {failed ? <AlertTriangle className="h-3.5 w-3.5 text-destructive" /> : done ? <FilePenLine className="h-3.5 w-3.5 text-primary" /> : <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+    <div
+      className={cn(
+        'ml-10 inline-flex max-w-[85%] items-center gap-2 rounded-full border px-3 py-1 text-xs transition-colors duration-500 animate-in fade-in zoom-in-95',
+        failed ? 'border-destructive/40 text-destructive' : done ? 'border-brand-green/50 bg-brand-green/10 text-brand-navy' : 'border-dashed border-brand-light1 text-brand-blue',
+      )}
+    >
+      {failed ? <AlertTriangle className="h-3.5 w-3.5" /> : done ? <FilePenLine className="h-3.5 w-3.5 text-emerald-600" /> : <Loader2 className="h-3.5 w-3.5 animate-spin" />}
       <span className="truncate">
         {failed ? 'BRD update failed' : done ? 'Updated BRD' : 'Updating BRD'}
         {fields.length ? ` · ${fields.join(', ')}` : ''}
@@ -319,7 +379,7 @@ function StatusPanel({ request }: { request: Props['request'] }) {
     ),
   };
   return (
-    <div className="border-t bg-muted/40 p-4 text-sm">
+    <div className="border-t border-brand-border/70 bg-white/80 p-4 text-sm backdrop-blur animate-in fade-in slide-in-from-bottom-2">
       <p>{copy[request.status]}</p>
       {request.confluencePageUrl && (
         <p className="mt-1 text-xs">
