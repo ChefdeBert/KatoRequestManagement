@@ -2,12 +2,17 @@
 # Deploy main.bicep to one environment.
 #   infra/scripts/deploy.sh prod            # phase 1: network, data, registry, Key Vault, environment
 #   KATO_DEPLOY_APPS=true KATO_IMAGE_TAG=abc123 infra/scripts/deploy.sh prod   # phase 2 (release.sh does this)
+#   infra/scripts/deploy.sh prod --network-only   # step 0: just the VNet, so the Networks team can connect it to the vWAN hub
 # Add --what-if to preview changes without applying them.
 set -euo pipefail
 # shellcheck source=_common.sh
 source "$(dirname "$0")/_common.sh" "${1:-}"
 shift
-EXTRA_ARGS=("$@")
+NETWORK_ONLY=false
+EXTRA_ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" == "--network-only" ]]; then NETWORK_ONLY=true; else EXTRA_ARGS+=("$arg"); fi
+done
 
 # The dev resource group doesn't exist yet: create it. Production's is pre-created.
 if [[ "$(az group exists -n "$RG")" != "true" ]]; then
@@ -19,6 +24,37 @@ fi
 # Network and DNS values are needed from the very first deployment.
 if grep -nE "^param (privateDnsZone|vnet|acaSubnet|postgresSubnet|privateEndpointSubnet|dnsServers).*'TODO" "$INFRA_DIR/$KATO_ENV.bicepparam"; then
   die "Fill in the network/DNS TODO values in infra/$KATO_ENV.bicepparam first."
+fi
+
+# Step 0: deploy only modules/network.bicep, with the same values main.bicep would pass it, so the
+# later full deployment finds the VNet unchanged. The vWAN hub connection is then made by the Networks team.
+if [[ "$NETWORK_ONLY" == "true" ]]; then
+  PARAMS_FILE="$(mktemp)"
+  trap 'rm -f "$PARAMS_FILE"' EXIT
+  KATO_PG_ADMIN_PASSWORD=unused az bicep build-params --file "$INFRA_DIR/$KATO_ENV.bicepparam" --stdout \
+    | python3 -c '
+import json, sys
+p = {k: v["value"] for k, v in json.loads(json.load(sys.stdin)["parametersJson"])["parameters"].items()}
+env = p["environmentName"]
+tags = {"application": "kato", "environment": env, "managed-by": "bicep", **p.get("tags", {})}
+out = {
+  "location": p.get("location", "southafricanorth"), "namePrefix": "kato-" + env, "tags": tags,
+  "addressPrefix": p["vnetAddressPrefix"], "acaSubnetPrefix": p["acaSubnetPrefix"],
+  "postgresSubnetPrefix": p["postgresSubnetPrefix"], "privateEndpointSubnetPrefix": p["privateEndpointSubnetPrefix"],
+  "dnsServers": p.get("dnsServers", []), "enableNatGateway": p["enableNatGateway"],
+}
+json.dump({"$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+           "contentVersion": "1.0.0.0", "parameters": {k: {"value": v} for k, v in out.items()}}, sys.stdout)
+' > "$PARAMS_FILE"
+  log "Deploying the Kato ($KATO_ENV) VNet only to $RG"
+  az deployment group create \
+    -g "$RG" \
+    -n "kato-$KATO_ENV-network-$(date +%Y%m%d-%H%M%S)" \
+    --template-file "$INFRA_DIR/modules/network.bicep" \
+    --parameters "@$PARAMS_FILE" \
+    --query "properties.outputs" -o jsonc \
+    "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+  exit 0
 fi
 
 # Postgres admin password: reuse the one in Key Vault, else generate one and store it after deploy.
