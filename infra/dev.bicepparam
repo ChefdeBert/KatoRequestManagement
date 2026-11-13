@@ -68,9 +68,9 @@ param settings = {
   ASSESSMENT_MODEL: ''
 
   // Point dev at a sandbox project and space so test requests never reach the real backlog
-  JIRA_BASE_URL: 'https://liquidtelecom.atlassian.net'
+  JIRA_BASE_URL: 'https://liquidtelecom-sandbox.atlassian.net/'
   JIRA_EMAIL: 'svc-kato@cassava.tech'
-  JIRA_PROJECT_KEY: 'TODO-sandbox-project'
+  JIRA_PROJECT_KEY: 'KATODEV'
   JIRA_SYNC_MAX_ATTEMPTS: '3'
   JIRA_CUSTOM_FIELDS: ''
 
